@@ -449,7 +449,7 @@ def parse_args() -> Config:
         config.connector_list = []
     else:
         # Check for conflicting flags
-        if has_kv_transfer_config:
+        if 'none' not in args.connector and has_kv_transfer_config:
             raise ValueError(
                 "Cannot specify both --kv-transfer-config and --connector flags"
             )
