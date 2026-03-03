@@ -76,7 +76,7 @@ class EncodeWorkerHandler:
         self._processed_requests = 0
         self.readables = []
         self.cached_embeddings = {}
-        self._encoder_lock = threading.Lock()
+        self._encoder_lock = asyncio.Lock()
 
     def cleanup(self):
         pass
@@ -146,7 +146,8 @@ class EncodeWorkerHandler:
 
                 # Encode the image embeddings using model-specific encoder
                 # Serialize vision encoder (concurrent use of a shared model corrupts state)
-                with self._encoder_lock:
+                async with self._encoder_lock:
+                    logger.debug(f'Acquired Lock with event-loop tid={threading.get_native_id()}')
                     embeddings = await asyncio.to_thread(
                         encode_image_embeddings,
                         model_name=self.model,
@@ -154,6 +155,7 @@ class EncodeWorkerHandler:
                         vision_encoder=self.vision_encoder,
                         projector=self.projector,
                     )
+                    logger.debug(f'Received embeddings: tid={threading.get_native_id()}')
 
                 image_grid_thw = (
                     image_embeds["image_grid_thw"].tolist()
