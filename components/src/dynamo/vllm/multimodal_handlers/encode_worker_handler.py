@@ -5,6 +5,7 @@ import asyncio
 import logging
 import os
 import shutil
+import threading
 import time
 from typing import AsyncGenerator, AsyncIterator
 
@@ -75,6 +76,7 @@ class EncodeWorkerHandler:
         self._processed_requests = 0
         self.readables = []
         self.cached_embeddings = {}
+        self._encoder_lock = threading.Lock()
 
     def cleanup(self):
         pass
@@ -143,13 +145,15 @@ class EncodeWorkerHandler:
                 image_embeds = self.image_processor(images=image, return_tensors="pt")
 
                 # Encode the image embeddings using model-specific encoder
-                embeddings = await asyncio.to_thread(
-                    encode_image_embeddings,
-                    model_name=self.model,
-                    image_embeds=image_embeds,
-                    vision_encoder=self.vision_encoder,
-                    projector=self.projector,
-                )
+                # Serialize vision encoder (concurrent use of a shared model corrupts state)
+                with self._encoder_lock:
+                    embeddings = await asyncio.to_thread(
+                        encode_image_embeddings,
+                        model_name=self.model,
+                        image_embeds=image_embeds,
+                        vision_encoder=self.vision_encoder,
+                        projector=self.projector,
+                    )
 
                 image_grid_thw = (
                     image_embeds["image_grid_thw"].tolist()
