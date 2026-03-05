@@ -166,15 +166,15 @@ class EncodeWorkerHandler:
                     f"Pixel values stats: mean={image_embeds['pixel_values'].mean().item()}, std={image_embeds['pixel_values'].std().item()}, min={image_embeds['pixel_values'].min().item()}, max={image_embeds['pixel_values'].max().item()}"
                 )
 
-                # Move embeddings to CPU for NIXL transfer to avoid UCX/InfiniBand issues
-                embeddings_cpu = embeddings.cpu()
-
                 request.multimodal_inputs[idx].image_grid_thw = image_grid_thw
                 request.multimodal_inputs[idx].embeddings_shape = tuple(
                     embeddings.shape
                 )
 
                 if TRANSFER_LOCAL:
+                    # TODO: Ideal to have embeddings on device. This is done in the non-local NIXL path
+                    embeddings_cpu = embeddings.cpu()
+
                     embedding_key = get_embedding_hash(image_url)
                     logger.debug(
                         f"ENCODER: saving local safetensors file with key {embedding_key}, {embeddings_cpu.numel()} * {embeddings_cpu.element_size()} bytes"
@@ -196,7 +196,7 @@ class EncodeWorkerHandler:
                     )
                 else:
                     # [gluo FIXME] nixl_connector path needs to be update to handle multiple embeddings
-                    descriptor = connect.Descriptor(embeddings_cpu)
+                    descriptor = connect.Descriptor(embeddings)
                     self.readables.append(
                         await self._connector.create_readable(descriptor)
                     )
