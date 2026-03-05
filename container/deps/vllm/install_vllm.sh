@@ -128,7 +128,7 @@ if [ "$DEVICE" = "cuda" ]; then
     echo "\n=== Configuration Summary ==="
     echo "  VLLM_REF=$VLLM_REF | ARCH=$ARCH | CUDA_VERSION=$CUDA_VERSION | TORCH_BACKEND=$TORCH_BACKEND"
     echo "  TORCH_CUDA_ARCH_LIST=$TORCH_CUDA_ARCH_LIST | INSTALLATION_DIR=$INSTALLATION_DIR"
-elif [ "$DEVICE" = "xpu" ]; then
+elif [ "$DEVICE" = "xpu" ] || [ "$DEVICE" = "cpu" ]; then
     echo "\n=== Configuration Summary ==="
     echo "  VLLM_REF=$VLLM_REF | ARCH=$ARCH | INSTALLATION_DIR=$INSTALLATION_DIR"
 fi
@@ -214,6 +214,17 @@ if [ "$DEVICE" = "cuda" ]; then
     fi
     uv pip install flashinfer-cubin==$FLASHINF_REF
     uv pip install flashinfer-jit-cache==$FLASHINF_REF --extra-index-url https://flashinfer.ai/whl/${TORCH_BACKEND}
+fi
+
+if [ "$DEVICE" = "cpu" ]; then
+    echo "\n=== Installing vLLM for cpu ==="
+    if [ -n "${CACHE_BUSTER}" ]; then \
+        echo "$CACHE_BUSTER" > /tmp/builder-buster; \
+    fi;
+    uv pip install -r requirements/cpu-build.txt
+    VLLM_TARGET_DEVICE=cpu \
+    python3 setup.py bdist_wheel --dist-dir=dist --py-limited-api=cp38
+    uv pip install dist/*.whl
 fi
 echo "✓ vLLM installation completed"
 
