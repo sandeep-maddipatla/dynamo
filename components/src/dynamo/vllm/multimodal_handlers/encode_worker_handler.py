@@ -268,8 +268,8 @@ class EncodeWorkerHandler:
             for split_idx, (list_idx, key) in enumerate(need_encode_indexes):
                 embedding_lists[list_idx] = EmbeddingItem(
                     key,
-                    [image_grid_thw[split_idx]] if image_grid_thw else [],
-                    splitted_embeddings[split_idx].unsqueeze(0),
+                    [image_grid_thw[split_idx]] if image_grid_thw else None,
+                    splitted_embeddings[split_idx].unsqueeze(0).cpu(), # WA for XPU (keep embeddings in CPU memory for now)
                 )
                 # Cache the computed value for future use
                 if self.embedding_cache is not None:
