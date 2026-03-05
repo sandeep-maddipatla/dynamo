@@ -123,6 +123,14 @@ class DynamoVllmArgGroup(ArgGroup):
                 "'USER: <image> please describe the image ASSISTANT:'."
             ),
         )
+        add_negatable_bool_argument(
+            g,
+            flag_name="--encode-worker-enforce-eager",
+            env_var="DYN_VLLM_ENCODE_WORKER_ENFORCE_EAGER",
+            default=False,
+            help="Force eager mode when loading vision model in encode worker. "
+            "Disables torch.compile for the encoder-only vLLM instance.",
+        )
 
         add_negatable_bool_argument(
             g,
@@ -335,6 +343,7 @@ class DynamoVllmConfig(ConfigBase):
     enable_multimodal: bool
     mm_prompt_template: str
     frontend_decoding: bool
+    encode_worker_enforce_eager: bool
     embedding_transfer_mode: Union[
         str, EmbeddingTransferMode
     ]  # resolved to enum in validate()
