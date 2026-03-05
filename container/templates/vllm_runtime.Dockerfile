@@ -67,12 +67,11 @@ ENV CPATH=/usr/local/cuda/include \
 COPY --from=dynamo_base /usr/bin/nats-server /usr/bin/nats-server
 COPY --from=dynamo_base /usr/local/bin/etcd/ /usr/local/bin/etcd/
 
-{% if device == "xpu" %}
-ENV PATH=/usr/local/bin/etcd/:$PATH
-{% else %}
 # Add ETCD and CUDA binaries to PATH so cicc and other CUDA tools are accessible
-ENV PATH=/usr/local/bin/etcd/:/usr/local/cuda/nvvm/bin:$PATH
+{% if device == "cuda" %}
+ENV PATH=/usr/local/cuda/nvvm/bin:$PATH
 {% endif %}
+ENV PATH=/usr/local/bin/etcd/:$PATH
 
 # Copy uv to system /bin
 COPY --from=dynamo_base /bin/uv /bin/uvx /bin/
@@ -154,6 +153,32 @@ RUN wget https://github.com/uxlfoundation/oneCCL/releases/download/2021.15.7/int
     ln -s /opt/intel/oneapi/ccl/2021.15 /opt/intel/oneapi/ccl/latest
 {% endif %}
 
+{% if device == "cpu" %}
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    curl \
+    git \
+    wget \
+    vim \
+    ca-certificates \
+    gcc-12 g++-12 ccache \
+    libtcmalloc-minimal4 libnuma-dev \
+    ffmpeg libsm6 libxext6 libgl1 jq lsof && \
+    update-ca-certificates  && \
+    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 10 --slave /usr/bin/g++ g++ /usr/bin/g++-12 && \
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+
+ENV CCACHE_DIR=/root/.cache/ccache
+ENV CMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+ENV PATH="/root/.local/bin:$PATH"
+ENV VIRTUAL_ENV="/opt/venv"
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
+RUN uv venv --python ${PYTHON_VERSION} --seed ${VIRTUAL_ENV}
+
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+{% endif %}
+
 {% if context.vllm.enable_media_ffmpeg == "true" %}
 # Copy ffmpeg libraries from wheel_builder (requires root, runs before USER dynamo)
 RUN --mount=type=bind,from=wheel_builder,source=/usr/local/,target=/tmp/usr/local/ \
@@ -169,7 +194,7 @@ ENV HOME=/home/dynamo
 # This picks up the umask 002 from the /etc/profile.d/00-umask.sh file for subsequent RUN commands
 SHELL ["/bin/bash", "-l", "-o", "pipefail", "-c"]
 
-{% if device == "xpu" %}
+{% if device == "xpu" or device == "cpu" %}
 ENV NIXL_PREFIX=/opt/intel/intel_nixl
 ENV NIXL_LIB_DIR=$NIXL_PREFIX/lib/${ARCH_ALT}-linux-gnu
 ENV NIXL_PLUGIN_DIR=$NIXL_LIB_DIR/plugins
@@ -221,7 +246,7 @@ COPY --chown=dynamo:0 --from=framework /opt/vllm /opt/vllm
 # Copy UCX and NIXL to system directories (read-only, no group-write needed)
 COPY --from=wheel_builder /usr/local/ucx /usr/local/ucx
 COPY --chown=dynamo: --from=wheel_builder $NIXL_PREFIX $NIXL_PREFIX
-{% if device == "xpu" %}
+{% if device == "xpu" or device == "cpu" %}
 COPY --chown=dynamo: --from=wheel_builder /opt/intel/intel_nixl/lib/${ARCH_ALT}-linux-gnu/. ${NIXL_LIB_DIR}/
 {% else %}
 COPY --chown=dynamo: --from=wheel_builder /opt/nvidia/nvda_nixl/lib64/. ${NIXL_LIB_DIR}/
@@ -251,6 +276,10 @@ ENV LD_LIBRARY_PATH=\
 /opt/vllm/tools/ep_kernels/ep_kernels_workspace/nvshmem_install/lib:\
 $LD_LIBRARY_PATH
 ENV NVIDIA_DRIVER_CAPABILITIES=video,compute,utility
+{% endif %}
+
+{% if device == "cpu" %}
+ENV LD_PRELOAD="/usr/lib/x86_64-linux-gnu/libtcmalloc_minimal.so.4:/opt/venv/lib/libiomp5.so"
 {% endif %}
 
 # TODO: skip /workspace COPYs for dev/local-dev (bind-mounted from host, these get shadowed)
@@ -384,7 +413,9 @@ RUN uv pip uninstall triton triton-xpu && \
     uv pip install triton-xpu==3.6.0 --extra-index-url=https://download.pytorch.org/whl/test/xpu && \
     uv pip uninstall oneccl && \
     uv pip uninstall oneccl-devel
+{%endif%}
 
+{% if device == "xpu" or device == "cpu" %}
 SHELL ["bash", "-c"]
 CMD ["bash", "-c", "source /etc/bash.bashrc && exec bash"]
 {% else %}

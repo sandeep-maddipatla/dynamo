@@ -10,7 +10,7 @@
 # PURPOSE: Framework development and vLLM compilation
 #
 # This stage builds and compiles framework dependencies including:
-# - vLLM inference engine with CUDA/XPU support
+# - vLLM inference engine with CUDA/XPU/CPU support
 # - DeepGEMM and FlashInfer optimizations
 # - All necessary build tools and compilation dependencies
 # - Framework-level Python packages and extensions
@@ -86,6 +86,22 @@ ENV CUDA_HOME=/usr/local/cuda
 RUN wget --tries=3 --waitretry=5 https://raw.githubusercontent.com/intel/llm-scaler/35a14cbc08d714f460a29b7a7328df5620c8530f/vllm/patches/ai-dynamo-xpu/patches/vllm-xpu-v0.14.0.patch -O /tmp/vllm-xpu.patch
 ENV VLLM_TARGET_DEVICE=xpu
 ENV VLLM_WORKER_MULTIPROC_METHOD=spawn
+{% endif %}
+
+{% if device == "cpu" %}
+ENV VLLM_TARGET_DEVICE=cpu
+ARG VLLM_CPU_DISABLE_AVX512=0
+# Support for building with AVX512BF16 ISA
+ARG VLLM_CPU_AVX512BF16=0
+# Support for building with AVX512VNNI ISA
+ARG VLLM_CPU_AVX512VNNI=0
+# Support for building with AMXBF16 ISA
+ARG VLLM_CPU_AMXBF16=1
+
+ENV VLLM_CPU_DISABLE_AVX512=${VLLM_CPU_DISABLE_AVX512}
+ENV VLLM_CPU_AVX512BF16=${VLLM_CPU_AVX512BF16}
+ENV VLLM_CPU_AVX512VNNI=${VLLM_CPU_AVX512VNNI}
+ENV VLLM_CPU_AMXBF16=${VLLM_CPU_AMXBF16}
 {% endif %}
 
 # Install VLLM and related dependencies
