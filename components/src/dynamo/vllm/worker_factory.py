@@ -253,7 +253,9 @@ class WorkerFactory:
         shutdown_endpoints[:] = [generate_endpoint]
 
         handler = EncodeWorkerHandler(
-            config.engine_args, config.embedding_transfer_mode
+            config.engine_args,
+            config.embedding_transfer_mode,
+            enforce_eager=config.encode_worker_enforce_eager,
         )
         await handler.async_init(runtime)
         logger.info("Starting to serve the encode worker endpoint...")
