@@ -39,34 +39,17 @@ ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-16} \
 COPY --from=dynamo_base $RUSTUP_HOME $RUSTUP_HOME
 COPY --from=dynamo_base $CARGO_HOME $CARGO_HOME
 
-{% if device == "xpu" or device == "cpu" %}
+{% if device == "xpu" %}
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor | tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null && \
     echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | tee /etc/apt/sources.list.d/oneAPI.list && \
     add-apt-repository -y ppa:kobuk-team/intel-graphics
 
+# Fetch UCX patch
 RUN wget --tries=3 --waitretry=5 https://raw.githubusercontent.com/intel/llm-scaler/35a14cbc08d714f460a29b7a7328df5620c8530f/vllm/patches/ai-dynamo-xpu/patches/ucx-v1.12.0.patch -O /tmp/ucx.patch
 
-RUN apt clean && apt-get update -y && \
-    apt-get install -y --no-install-recommends --fix-missing \
-    curl \
-    #ffmpeg \
-    ca-certificates \
-    zip \
-    unzip \
-    git \
-    libsndfile1 \
-    libsm6 \
-    libxext6 \
-    libgl1 \
-    lsb-release \
-    libaio-dev \
-    numactl \
-    wget \
-    vim \
-    linux-libc-dev && \
-    # Install Intel GPU runtime packages
-    apt update -y && apt upgrade -y && \
+# Install Intel GPU runtime packages
+RUN apt update -y && apt upgrade -y && \
     apt-get install -y libze1 libze-dev libze-intel-gpu1 intel-opencl-icd  \
     libze-intel-gpu-raytracing intel-ocloc intel-oneapi-compiler-dpcpp-cpp-2025.3 && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
