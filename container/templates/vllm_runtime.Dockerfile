@@ -174,7 +174,10 @@ ENV CMAKE_CXX_COMPILER_LAUNCHER=ccache
 ENV PATH="/root/.local/bin:$PATH"
 ENV VIRTUAL_ENV="/opt/dynamo/venv"
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
-RUN uv venv --python ${PYTHON_VERSION} --seed ${VIRTUAL_ENV}
+RUN uv venv --python ${PYTHON_VERSION} --seed ${VIRTUAL_ENV} && \
+    mkdir -p ${VIRTUAL_ENV}/include/site/python${PYTHON_VERSION} && \
+    chown -R dynamo:0 ${VIRTUAL_ENV} && \
+    chmod -R g+w ${VIRTUAL_ENV}
 
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 {% endif %}
@@ -269,17 +272,17 @@ $NIXL_LIB_DIR:\
 $NIXL_PLUGIN_DIR:\
 /usr/local/ucx/lib:\
 /usr/local/ucx/lib/ucx:\
-$LD_LIBRARY_PATH
+${LD_LIBRARY_PATH:-}
 
 {% if device == "cuda" %}
 ENV LD_LIBRARY_PATH=\
 /opt/vllm/tools/ep_kernels/ep_kernels_workspace/nvshmem_install/lib:\
-$LD_LIBRARY_PATH
+${LD_LIBRARY_PATH:-}
 ENV NVIDIA_DRIVER_CAPABILITIES=video,compute,utility
 {% endif %}
 
 {% if device == "cpu" %}
-ENV LD_PRELOAD="/usr/lib/x86_64-linux-gnu/libtcmalloc_minimal.so.4:/opt/venv/lib/libiomp5.so"
+ENV LD_PRELOAD="/usr/lib/x86_64-linux-gnu/libtcmalloc_minimal.so.4:${VIRTUAL_ENV}/lib/libiomp5.so"
 {% endif %}
 
 # TODO: skip /workspace COPYs for dev/local-dev (bind-mounted from host, these get shadowed)

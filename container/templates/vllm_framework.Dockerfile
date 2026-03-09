@@ -93,16 +93,21 @@ ENV VLLM_WORKER_MULTIPROC_METHOD=spawn
 {% endif %}
 
 {% if device == "cpu" %}
+## Use guidelines from https://docs.vllm.ai/en/stable/getting_started/installation/cpu/#build-image-from-source
+## to build a cross compiled target to support AVX512, AMX ISA's
+## vllm-0.16 has a bug that handles non-AVX512 supported cases incorrectly
+## -  https://github.com/vllm-project/vllm/issues/33991
+## -  Build settings chosen to cross-compile with AVX512 support.
+
 ENV VLLM_TARGET_DEVICE=cpu
-ARG VLLM_CPU_DISABLE_AVX512=0
-# Support for building with AVX512BF16 ISA
-ARG VLLM_CPU_AVX512BF16=0
-# Support for building with AVX512VNNI ISA
-ARG VLLM_CPU_AVX512VNNI=0
-# Support for building with AMXBF16 ISA
-ARG VLLM_CPU_AMXBF16=1
+ARG VLLM_CPU_DISABLE_AVX512=false  # If false, decide based on build-machine support or below flags (latter overrides former). If true, disable AVX512 support.
+ARG VLLM_CPU_AVX512=true           # Support for building with AVX512 ISA (Explicitly enable to cross-compile)
+ARG VLLM_CPU_AVX512BF16=true       # Support for building with AVX512BF16 ISA
+ARG VLLM_CPU_AVX512VNNI=false      # Support for building with VLLM_CPU_AVX512VNNI ISA
+ARG VLLM_CPU_AMXBF16=true          # Support for building with AMXBF16 ISA
 
 ENV VLLM_CPU_DISABLE_AVX512=${VLLM_CPU_DISABLE_AVX512}
+ENV VLLM_CPU_AVX512=${VLLM_CPU_AVX512}
 ENV VLLM_CPU_AVX512BF16=${VLLM_CPU_AVX512BF16}
 ENV VLLM_CPU_AVX512VNNI=${VLLM_CPU_AVX512VNNI}
 ENV VLLM_CPU_AMXBF16=${VLLM_CPU_AMXBF16}
