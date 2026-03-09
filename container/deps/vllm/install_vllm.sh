@@ -218,10 +218,13 @@ fi
 
 if [ "$DEVICE" = "cpu" ]; then
     echo "\n=== Installing vLLM for cpu ==="
-    if [ -n "${CACHE_BUSTER}" ]; then \
-        echo "$CACHE_BUSTER" > /tmp/builder-buster; \
-    fi;
-    uv pip install -r requirements/cpu-build.txt
+    if [ -n "${CACHE_BUSTER:-}" ]; then
+        echo "$CACHE_BUSTER" > /tmp/builder-buster
+    fi
+    # vLLM CPU requirements pin torch with a +cpu local version (e.g. 2.10.0+cpu),
+    # which is published on the PyTorch CPU wheel index instead of PyPI.
+    python -c "import platform; print(platform.machine())"
+    uv pip install -r requirements/cpu-build.txt --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match
     VLLM_TARGET_DEVICE=cpu \
     python3 setup.py bdist_wheel --dist-dir=dist --py-limited-api=cp38
     uv pip install dist/*.whl

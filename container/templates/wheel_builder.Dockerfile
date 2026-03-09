@@ -21,6 +21,9 @@ ARG CARGO_BUILD_JOBS
 ARG DEVICE
 
 WORKDIR /workspace
+ARG COMMON_UTILS
+RUN apt clean && apt-get update -y && \
+    apt-get install -y --no-install-recommends --fix-missing $COMMON_UTILS
 
 {% if device == "cuda" %}
 # Copy CUDA from base stage
@@ -229,6 +232,7 @@ RUN --mount=type=secret,id=aws-key-id,env=AWS_ACCESS_KEY_ID \
     dnf install -y pkg-config; \
     fi && \
     cd /tmp && \
+    echo FFMPEG_VERSION=$FFMPEG_VERSION && \
     curl -LO https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz && \
     tar xf ffmpeg-${FFMPEG_VERSION}.tar.xz && \
     cd ffmpeg-${FFMPEG_VERSION} && \

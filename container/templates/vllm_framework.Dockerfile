@@ -29,6 +29,10 @@ COPY --from=dynamo_base /bin/uv /bin/uvx /bin/
 ARG PYTHON_VERSION
 ARG DEVICE
 
+ARG COMMON_UTILS
+RUN apt clean && apt-get update -y && \
+    apt-get install -y --no-install-recommends --fix-missing $COMMON_UTILS
+
 # Cache apt downloads; sharing=locked avoids apt/dpkg races with concurrent builds.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update -y \
