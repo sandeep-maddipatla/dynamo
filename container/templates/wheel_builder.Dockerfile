@@ -226,10 +226,10 @@ RUN --mount=type=secret,id=aws-key-id,env=AWS_ACCESS_KEY_ID \
         eval $(/tmp/use-sccache.sh setup-env); \
     fi && \
     if [ "$DEVICE" = "xpu" ] || [ "$DEVICE" = "cpu" ]; then \
-    apt-get update -y && apt-get install -y pkg-config; \
+    apt-get update -y && apt-get install -y build-essential pkg-config xz-utils; \
     apt-get clean && rm -rf /var/lib/apt/lists/*; \
     elif [ "$DEVICE" = "cuda" ]; then \
-    dnf install -y pkg-config; \
+    dnf install -y pkg-config xz; \
     fi && \
     cd /tmp && \
     echo FFMPEG_VERSION=$FFMPEG_VERSION && \
