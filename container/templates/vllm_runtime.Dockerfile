@@ -172,7 +172,7 @@ ENV CCACHE_DIR=/root/.cache/ccache
 ENV CMAKE_CXX_COMPILER_LAUNCHER=ccache
 
 ENV PATH="/root/.local/bin:$PATH"
-ENV VIRTUAL_ENV="/opt/venv"
+ENV VIRTUAL_ENV="/opt/dynamo/venv"
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
 RUN uv venv --python ${PYTHON_VERSION} --seed ${VIRTUAL_ENV}
 
