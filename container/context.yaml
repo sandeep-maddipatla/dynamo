@@ -58,7 +58,7 @@ vllm:
     runtime_image: ubuntu
     base_image_tag: 24.04
     runtime_image_tag: 24.04
-    vllm_ref: v0.16.0    
+    vllm_ref: v0.17.0
   flashinf_ref: v0.6.3
   lmcache_ref: 0.3.14
   vllm_omni_ref: "v0.16.0rc1"
