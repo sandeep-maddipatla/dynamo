@@ -43,7 +43,6 @@ COPY --from=dynamo_base $RUSTUP_HOME $RUSTUP_HOME
 COPY --from=dynamo_base $CARGO_HOME $CARGO_HOME
 
 {% if device == "xpu" %}
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor | tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null && \
     echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | tee /etc/apt/sources.list.d/oneAPI.list && \
     add-apt-repository -y ppa:kobuk-team/intel-graphics
@@ -59,6 +58,7 @@ RUN apt update -y && apt upgrade -y && \
 {% endif %}
 
 {% if device == "xpu" or device == "cpu" %}
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN apt-get update -y \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         # NIXL build dependencies
