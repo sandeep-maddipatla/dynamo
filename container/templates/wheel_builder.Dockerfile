@@ -22,8 +22,10 @@ ARG DEVICE
 
 WORKDIR /workspace
 ARG COMMON_UTILS
+{% if device == "xpu" or device == "cpu" %}
 RUN apt clean && apt-get update -y && \
     apt-get install -y --no-install-recommends --fix-missing $COMMON_UTILS
+{% endif %}
 
 {% if device == "cuda" %}
 # Copy CUDA from base stage
