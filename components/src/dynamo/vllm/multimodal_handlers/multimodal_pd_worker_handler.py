@@ -3,6 +3,7 @@
 
 import copy
 import logging
+import time
 import uuid
 from collections import defaultdict
 from typing import Any
@@ -383,22 +384,27 @@ class MultimodalPDWorkerHandler(BaseWorkerHandler):
 
     async def generate(self, raw_request: dict, context):
         """Parse the request, load multimodal data, and run inference."""
+        t_pd_start = time.perf_counter()
         rng_pd = _nvtx.start_range("mm:pd_worker_generate", color="green")
         rng_ttft = _nvtx.start_range("mm:pd:ttft", color="orange")
 
         rng_parse = _nvtx.start_range("mm:pd:parse_request", color="cyan")
         request, image_urls = self._parse_frontend_request(raw_request)
-        logger.debug(f"Received PD request: {{ id: {request.request_id} }}.")
+        request_id = request.request_id
+        logger.debug(f"Received PD request: {{ id: {request_id} }}.")
         _nvtx.end_range(rng_parse)
 
+        t_wait_e_start = time.perf_counter()
         rng_load = _nvtx.start_range("mm:pd:load_multimodal", color="yellow")
         multi_modal_data = await self._load_multimodal_data(
-            image_urls, request.request_id
+            image_urls, request_id
         )
         _nvtx.end_range(rng_load)
+        t_wait_e_end = time.perf_counter()
 
         self._finalize_request_metadata(request, multi_modal_data)
 
+        t_run_start = time.perf_counter()
         if self.enable_disagg and self.decode_worker_client:
             rng_disagg = _nvtx.start_range("mm:pd:generate_disagg", color="red")
             async for chunk in self._generate_disagg(
@@ -412,4 +418,11 @@ class MultimodalPDWorkerHandler(BaseWorkerHandler):
                 yield chunk
             _nvtx.end_range(rng_agg)
 
+        t_run_end = time.perf_counter()
         _nvtx.end_range(rng_pd)
+
+        # Emit PD state transitions for llm-pd-log-viz
+        logger.info(f"req_id={request_id} Enter State 'PD-WAITING' at {t_pd_start}")
+        logger.info(f"req_id={request_id} Enter State 'PD-WAITING-FOR-E' at {t_wait_e_start}")
+        logger.info(f"req_id={request_id} Enter State 'PD-RUNNING' at {t_run_start}")
+        logger.info(f"req_id={request_id} Removed from 'PD-RUNNING' at {t_run_end}")

@@ -186,6 +186,8 @@ class EncodeWorkerHandler:
                         # keep track of key to avoid recompute of it
                         need_encode_indexes.append((idx, embedding_key))
 
+            t_cache = time.perf_counter()
+
             with _nvtx.annotate("mm:enc:image_load", color="green"):
                 # Load and generate image tensors
                 image_tasks = []
@@ -215,15 +217,30 @@ class EncodeWorkerHandler:
                         f"Errors occurred during image loading:\n{collective_exceptions}"
                     )
 
+            t_load = time.perf_counter()
+
+            # Initialise timing variables so the EPD_TIMING log line
+            # works even when every image was served from cache
+            # (i.e. loaded_images is empty and the block below is skipped).
+            t_preprocess = t_load
+            t_sem_enter = t_load
+            t_vit_start = t_load
+            t_encode = t_load
+            t_to_cpu = t_load
+
             if loaded_images:
                 with _nvtx.annotate("mm:enc:image_preprocess", color="yellow"):
                     image_embeds = await asyncio.to_thread(
                         self.image_processor, images=loaded_images, return_tensors="pt"
                     )
 
+                t_preprocess = time.perf_counter()
+
                 with _nvtx.annotate("mm:enc:vision_encode", color="red"):
                     # Encode the image embeddings using model-specific encoder
+                    t_sem_enter = time.perf_counter()
                     async with self._vision_encode_lock:
+                        t_vit_start = time.perf_counter()
 
                         def _encode_and_sync():
                             result = encode_image_embeddings(
@@ -241,6 +258,8 @@ class EncodeWorkerHandler:
                             return result
 
                         embeddings = await asyncio.to_thread(_encode_and_sync)
+
+                t_encode = time.perf_counter()
 
                 with _nvtx.annotate("mm:enc:split_and_cpu", color="orange"):
 
@@ -292,6 +311,8 @@ class EncodeWorkerHandler:
 
                     await asyncio.to_thread(_to_cpu_split_and_cache)
 
+                t_to_cpu = time.perf_counter()
+
             before_transfer_time = time.perf_counter()
 
             with _nvtx.annotate("mm:enc:embedding_transfer", color="purple"):
@@ -342,6 +363,30 @@ class EncodeWorkerHandler:
                 f"Encoded image(s) for request {{ id: {request_id} }} in {time_end - time_start:.4f} seconds. "
                 f"Average encoding time: {self._accumulated_time / self._processed_requests:.4f} seconds over {self._processed_requests} requests."
             )
+            logger.info(
+                f"[EPD_TIMING] req={request_id} "
+                f"E-CACHE-CHECK={(t_cache - time_start)*1000:.1f} "
+                f"E-IMAGE-LOAD={(t_load - t_cache)*1000:.1f} "
+                f"E-PREPROCESS={(t_preprocess - t_load)*1000:.1f} "
+                f"E-SEM-WAIT={(t_vit_start - t_sem_enter)*1000:.1f} "
+                f"E-VISION-ENCODE={(t_encode - t_vit_start)*1000:.1f} "
+                f"E-TO-CPU={(t_to_cpu - t_encode)*1000:.1f} "
+                f"E-NIXL-STAGE={(after_transfer_time - t_to_cpu)*1000:.1f} "
+                f"E-TRANSFER={(time_end - t_to_cpu)*1000:.1f} "
+                f"E-TOTAL={(time_end - time_start)*1000:.1f} "
+                f"n_images={len(request.multimodal_inputs)}"
+            )
+            # Emit perf_counter-based state transitions for llm-pd-log-viz
+            logger.info(f"req_id={request_id} Enter State 'E-RUNNING' at {time_start}")
+            logger.info(f"req_id={request_id} Enter State 'E-CACHE-CHECK' at {time_start}")
+            logger.info(f"req_id={request_id} Enter State 'E-IMAGE-LOAD' at {t_cache}")
+            logger.info(f"req_id={request_id} Enter State 'E-PREPROCESS' at {t_load}")
+            logger.info(f"req_id={request_id} Enter State 'E-SEM-WAIT' at {t_sem_enter}")
+            logger.info(f"req_id={request_id} Enter State 'E-VISION-ENCODE' at {t_vit_start}")
+            logger.info(f"req_id={request_id} Enter State 'E-TO-CPU' at {t_encode}")
+            logger.info(f"req_id={request_id} Enter State 'E-NIXL-STAGE' at {t_to_cpu}")
+            logger.info(f"req_id={request_id} Enter State 'E-TRANSFER' at {after_transfer_time}")
+            logger.info(f"req_id={request_id} Removed from 'E-RUNNING' at {time_end}")
 
             # Yield transformed request back
             yield request.model_dump_json()

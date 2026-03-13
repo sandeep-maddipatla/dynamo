@@ -4,6 +4,7 @@
 import asyncio
 import logging
 import os
+import time
 from collections import defaultdict
 from typing import Any, Dict, List
 
@@ -150,6 +151,8 @@ async def _fetch_from_encode_workers(
     if encode_worker_count == 0:
         raise RuntimeError("No encode workers available to process multimodal input")
 
+    t_dispatch_start = time.perf_counter()
+
     encode_batch_size = (
         max(1, len(image_urls) // encode_worker_count)
         if SPLIT_ENCODE
@@ -185,6 +188,8 @@ async def _fetch_from_encode_workers(
             await encode_worker_client.round_robin(payload)  # type: ignore[arg-type]
         )
 
+    t_dispatch_end = time.perf_counter()
+
     multimodal_groups: List[MultiModalGroup] = []
     for stream in encode_response_streams:
         async for response in stream:
@@ -193,11 +198,14 @@ async def _fetch_from_encode_workers(
             if output.multimodal_inputs:
                 multimodal_groups.extend(output.multimodal_inputs)
 
+    t_resp_end = time.perf_counter()
+
     tasks = [
         asyncio.create_task(receiver.receive_embeddings(group.serialized_request))
         for group in multimodal_groups
     ]
     loaded = await asyncio.gather(*tasks)
+    t_nixl_end = time.perf_counter()
 
     is_local = isinstance(receiver, LocalEmbeddingReceiver)
     pending: _PendingRelease | None = None if is_local else _PendingRelease(receiver)
@@ -205,6 +213,12 @@ async def _fetch_from_encode_workers(
         group.loaded_embedding = embedding
         if pending is not None:
             pending.track(tensor_id)
+
+    # Emit PD sub-phase state transitions for llm-pd-log-viz
+    logger.info(f"req_id={request_id} Enter State 'PD-DISPATCH-E' at {t_dispatch_start}")
+    logger.info(f"req_id={request_id} Enter State 'PD-WAIT-E-RESP' at {t_dispatch_end}")
+    logger.info(f"req_id={request_id} Enter State 'PD-NIXL-RECV' at {t_resp_end}")
+    logger.info(f"req_id={request_id} Removed from 'PD-NIXL-RECV' at {t_nixl_end}")
 
     return multimodal_groups, pending
 
