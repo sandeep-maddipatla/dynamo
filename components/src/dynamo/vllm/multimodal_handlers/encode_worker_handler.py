@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import contextlib
 import logging
 import os
 import time
@@ -43,6 +44,11 @@ CACHE_SIZE_MAXIMUM = 8
 # [gluo NOTE] default off to benchmark standalone encoder
 ENABLE_ENCODER_CACHE = int(os.getenv("ENABLE_ENCODER_CACHE", 1))
 
+# Serialise vision forward passes so concurrent requests do not
+# contend for GPU compute and blow up latency.  Set to "0" to
+# disable (e.g. when profiling throughput on a single stream).
+VISION_ENCODE_SERIALIZE = int(os.getenv("VISION_ENCODE_SERIALIZE", 1))
+
 
 @dataclass
 class EmbeddingItem:
@@ -83,6 +89,9 @@ class EncodeWorkerHandler:
         self._accumulated_time = 0.0
         self._processed_requests = 0
         self.readables = []
+        self._vision_encode_lock: asyncio.Lock | contextlib.nullcontext = (
+            asyncio.Lock() if VISION_ENCODE_SERIALIZE else contextlib.nullcontext()
+        )
         self.embedding_cache = EmbeddingCache() if ENABLE_ENCODER_CACHE else None
         if embedding_transfer_mode == EmbeddingTransferMode.LOCAL:
             self.embedding_sender = LocalEmbeddingSender()
@@ -214,13 +223,24 @@ class EncodeWorkerHandler:
 
                 with _nvtx.annotate("mm:enc:vision_encode", color="red"):
                     # Encode the image embeddings using model-specific encoder
-                    embeddings = await asyncio.to_thread(
-                        encode_image_embeddings,
-                        model_name=self.model,
-                        image_embeds=image_embeds,
-                        vision_encoder=self.vision_encoder,
-                        projector=self.projector,
-                    )
+                    async with self._vision_encode_lock:
+
+                        def _encode_and_sync():
+                            result = encode_image_embeddings(
+                                model_name=self.model,
+                                image_embeds=image_embeds,
+                                vision_encoder=self.vision_encoder,
+                                projector=self.projector,
+                            )
+                            # Block until the GPU kernel finishes so the
+                            # lock is not released while compute is still
+                            # in flight.
+                            backend = getattr(torch, result.device.type, None)
+                            if backend and hasattr(backend, "synchronize"):
+                                backend.synchronize()
+                            return result
+
+                        embeddings = await asyncio.to_thread(_encode_and_sync)
 
                 with _nvtx.annotate("mm:enc:split_embeddings", color="orange"):
                     # [gluo FIXME] This is specific to qwen vision processing..
