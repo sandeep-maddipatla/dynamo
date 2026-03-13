@@ -242,49 +242,55 @@ class EncodeWorkerHandler:
 
                         embeddings = await asyncio.to_thread(_encode_and_sync)
 
-                with _nvtx.annotate("mm:enc:split_embeddings", color="orange"):
-                    # [gluo FIXME] This is specific to qwen vision processing..
-                    # Split concatenated embeddings for each image item.
-                    if is_qwen_vl_model(self.model):
-                        merge_size = self.vision_encoder.spatial_merge_size
-                        sizes = (
-                            image_embeds["image_grid_thw"].prod(-1)
-                            // merge_size
-                            // merge_size
-                        ).tolist()
-                        splitted_embeddings = embeddings.squeeze(0).split(sizes)
-                        logger.debug(
-                            f"Splitted embeddings lengths: {[e.shape for e in splitted_embeddings]}"
+                with _nvtx.annotate("mm:enc:split_and_cpu", color="orange"):
+
+                    def _to_cpu_split_and_cache():
+                        # [gluo FIXME] This is specific to qwen vision processing..
+                        # Split concatenated embeddings for each image item.
+                        if is_qwen_vl_model(self.model):
+                            merge_size = self.vision_encoder.spatial_merge_size
+                            sizes = (
+                                image_embeds["image_grid_thw"].prod(-1)
+                                // merge_size
+                                // merge_size
+                            ).tolist()
+                            splitted_embeddings = embeddings.squeeze(0).split(sizes)
+                            logger.debug(
+                                f"Splitted embeddings lengths: {[e.shape for e in splitted_embeddings]}"
+                            )
+                        else:
+                            # Validated on llava (NOTE need to double check on other models) that the
+                            # embeddings already has batch dimension for images, so we can directly
+                            # split by batch dimension
+                            logger.debug(f"image embedding shape: {embeddings.shape}")
+                            splitted_embeddings = embeddings
+
+                        image_grid_thw = (
+                            image_embeds["image_grid_thw"].tolist()
+                            if "image_grid_thw" in image_embeds
+                            else None
                         )
-                    else:
-                        # Validated on llava (NOTE need to double check on other models) that the
-                        # embeddings already has batch dimension for images, so we can directly
-                        # split by batch dimension
-                        logger.debug(f"image embedding shape: {embeddings.shape}")
-                        splitted_embeddings = embeddings
 
-                    image_grid_thw = (
-                        image_embeds["image_grid_thw"].tolist()
-                        if "image_grid_thw" in image_embeds
-                        else None
-                    )
+                        # Move to CPU, fill embedding_lists, and cache —
+                        # all outside the encode lock so the next request
+                        # can start its forward pass immediately.
+                        for split_idx, (list_idx, key) in enumerate(need_encode_indexes):
+                            embedding_lists[list_idx] = EmbeddingItem(
+                                key,
+                                [image_grid_thw[split_idx]] if image_grid_thw else None,
+                                splitted_embeddings[split_idx].unsqueeze(0).cpu(),  # WA for XPU
+                            )
+                            # Cache the computed value for future use
+                            if self.embedding_cache is not None:
+                                self.embedding_cache.set(
+                                    embedding_lists[list_idx].key,
+                                    (
+                                        embedding_lists[list_idx].image_grid_thw,
+                                        embedding_lists[list_idx].embeddings,
+                                    ),
+                                )
 
-            # fill in the embedding_lists with new computed embeddings and cache them
-            for split_idx, (list_idx, key) in enumerate(need_encode_indexes):
-                embedding_lists[list_idx] = EmbeddingItem(
-                    key,
-                    [image_grid_thw[split_idx]] if image_grid_thw else None,
-                    splitted_embeddings[split_idx].unsqueeze(0).cpu(), # WA for XPU (keep embeddings in CPU memory for now)
-                )
-                # Cache the computed value for future use
-                if self.embedding_cache is not None:
-                    self.embedding_cache.set(
-                        embedding_lists[list_idx].key,
-                        (
-                            embedding_lists[list_idx].image_grid_thw,
-                            embedding_lists[list_idx].embeddings,
-                        ),
-                    )
+                    await asyncio.to_thread(_to_cpu_split_and_cache)
 
             before_transfer_time = time.perf_counter()
 
