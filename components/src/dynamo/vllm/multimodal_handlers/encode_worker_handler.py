@@ -49,6 +49,12 @@ ENABLE_ENCODER_CACHE = int(os.getenv("ENABLE_ENCODER_CACHE", 1))
 # disable (e.g. when profiling throughput on a single stream).
 VISION_ENCODE_SERIALIZE = int(os.getenv("VISION_ENCODE_SERIALIZE", 1))
 
+# When set to "1", copy embeddings to CPU host memory before NIXL transfer.
+# By default (0), CUDA and XPU tensors stay on device for direct
+# GPU memory RDMA.  Set to "1" only as a workaround when NIXL
+# cannot register the device memory (e.g. missing UCX ze_copy transport).
+NIXL_USE_CPU_HOST_MEMORY = int(os.getenv("NIXL_USE_CPU_HOST_MEMORY", 0))
+
 
 @dataclass
 class EmbeddingItem:
@@ -262,6 +268,10 @@ class EncodeWorkerHandler:
                 t_encode = time.perf_counter()
 
                 with _nvtx.annotate("mm:enc:split_and_cpu", color="orange"):
+                    # By default, tensors stay on their device for direct
+                    # GPU memory RDMA via NIXL.
+                    # Set NIXL_USE_CPU_HOST_MEMORY=1 to use CPU host memory instead.
+                    _needs_cpu = bool(NIXL_USE_CPU_HOST_MEMORY)
 
                     def _to_cpu_split_and_cache():
                         # [gluo FIXME] This is specific to qwen vision processing..
@@ -290,14 +300,16 @@ class EncodeWorkerHandler:
                             else None
                         )
 
-                        # Move to CPU, fill embedding_lists, and cache —
+                        # Move to CPU (if enabled), fill embedding_lists, and cache
                         # all outside the encode lock so the next request
                         # can start its forward pass immediately.
                         for split_idx, (list_idx, key) in enumerate(need_encode_indexes):
+                            split_tensor = splitted_embeddings[split_idx].unsqueeze(0)
+                            emb_tensor = split_tensor.cpu() if _needs_cpu else split_tensor
                             embedding_lists[list_idx] = EmbeddingItem(
                                 key,
                                 [image_grid_thw[split_idx]] if image_grid_thw else None,
-                                splitted_embeddings[split_idx].unsqueeze(0).cpu(),  # WA for XPU
+                                emb_tensor,
                             )
                             # Cache the computed value for future use
                             if self.embedding_cache is not None:

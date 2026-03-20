@@ -24,6 +24,25 @@ from dynamo.common.utils import nvtx_utils as _nvtx
 
 logger = logging.getLogger(__name__)
 
+# When True, NIXL transfer buffers are allocated in CPU host memory
+# instead of GPU device memory.  Default False = use GPU for GPUDirect RDMA.
+NIXL_USE_CPU_HOST_MEMORY = bool(int(os.getenv("NIXL_USE_CPU_HOST_MEMORY", 0)))
+
+
+def _nixl_buffer_device() -> torch.device:
+    """Return the best device for NIXL transfer buffers.
+
+    Prefers GPU (e.g. CUDA) for GPUDirect RDMA.  Falls back to CPU
+    when no GPU is available or NIXL_USE_CPU_HOST_MEMORY=1.
+    """
+    if NIXL_USE_CPU_HOST_MEMORY:
+        return torch.device("cpu")
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if hasattr(torch, "xpu") and torch.xpu.is_available():
+        return torch.device("xpu")
+    return torch.device("cpu")
+
 
 def torch_dtype_from_string(dtype_str: str) -> torch.dtype:
     """Convert dtype string to torch.dtype object.
@@ -794,10 +813,30 @@ class NixlReadEmbeddingSender(AbstractEmbeddingSender):
             transfer_buf = embeddings
         else:
             transfer_buf = embeddings.clone().detach()
+        # Ensure all device operations (squeeze/split/unsqueeze) are complete
+        # before NIXL exposes the buffer for RDMA.
+        _dev_type = getattr(transfer_buf, "device", None)
+        if _dev_type is not None:
+            _backend = getattr(torch, _dev_type.type, None)
+            if _backend and hasattr(_backend, "synchronize"):
+                _backend.synchronize()
         with _nvtx.annotate("mm:nixl:create_descriptor", color="pink"):
             descriptor = nixl_connect.Descriptor(transfer_buf)
         with _nvtx.annotate("mm:nixl:create_readable", color="pink"):
-            readable_op = await self.connector.create_readable(descriptor)
+            try:
+                readable_op = await self.connector.create_readable(descriptor)
+            except Exception as exc:
+                # If NIXL registration fails, fall back to CPU staging.
+                if hasattr(transfer_buf, 'is_xpu') and transfer_buf.is_xpu:
+                    logger.warning(
+                        "NIXL registration failed for XPU tensor, falling back "
+                        "to CPU staging: %s", exc
+                    )
+                    transfer_buf = transfer_buf.cpu()
+                    descriptor = nixl_connect.Descriptor(transfer_buf)
+                    readable_op = await self.connector.create_readable(descriptor)
+                else:
+                    raise
         request = TransferRequest(
             embeddings_shape=list(embeddings.shape),
             embedding_dtype_str=torch_dtype_to_string(embeddings.dtype),
@@ -896,6 +935,7 @@ class NixlReadEmbeddingReceiver(AbstractEmbeddingReceiver):
         logging.debug(
             f"Successfully read embeddings via NIXL: {encodings_tensor.shape}"
         )
+
         if original_descriptor_size is not None:
             descriptor._data_size = original_descriptor_size
         tensor_id = self.tensor_id_counter
