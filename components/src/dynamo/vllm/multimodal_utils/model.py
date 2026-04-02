@@ -51,6 +51,8 @@ class SupportedModels:
     QWEN_3_VL_4B_FP8 = "Qwen/Qwen3-VL-4B-Instruct-FP8"
     QWEN_3_VL_32B = "Qwen/Qwen3-VL-32B-Instruct"
     QWEN_3_VL_32B_FP8 = "Qwen/Qwen3-VL-32B-Instruct-FP8"
+    QWEN_3_VL_235B_A22B = "Qwen/Qwen3-VL-235B-A22B-Instruct"
+    QWEN_3_VL_235B_A22B_FP8 = "Qwen/Qwen3-VL-235B-A22B-Instruct-FP8"
 
 
 def normalize_model_name(model_name: str) -> str:
@@ -137,6 +139,8 @@ QWEN_VL_MODELS = [
     SupportedModels.QWEN_3_VL_4B_FP8,
     SupportedModels.QWEN_3_VL_32B,
     SupportedModels.QWEN_3_VL_32B_FP8,
+    SupportedModels.QWEN_3_VL_235B_A22B,
+    SupportedModels.QWEN_3_VL_235B_A22B_FP8,
 ]
 
 
