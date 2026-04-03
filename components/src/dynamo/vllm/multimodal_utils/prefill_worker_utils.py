@@ -4,6 +4,7 @@
 import asyncio
 import logging
 import os
+import time
 from typing import Any, Dict, List
 
 import torch
@@ -151,6 +152,8 @@ async def _fetch_from_encode_workers(
     if encode_worker_count == 0:
         raise RuntimeError("No encode workers available to process multimodal input")
 
+    t_dispatch_start = time.perf_counter()
+
     encode_batch_size = (
         max(1, len(image_urls) // encode_worker_count)
         if SPLIT_ENCODE
@@ -187,6 +190,8 @@ async def _fetch_from_encode_workers(
                 await encode_worker_client.round_robin(payload, context=context)  # type: ignore[arg-type]
             )
 
+    t_dispatch_end = time.perf_counter()
+
     with time_and_log_code_section(
         f"[PREFILL] request: {request_id} receive encode responses"
     ):
@@ -198,6 +203,8 @@ async def _fetch_from_encode_workers(
                 if output.multimodal_inputs:
                     multimodal_groups.extend(output.multimodal_inputs)
 
+    t_resp_end = time.perf_counter()
+
     with time_and_log_code_section(
         f"[PREFILL] request: {request_id} receive embeddings"
     ):
@@ -208,12 +215,20 @@ async def _fetch_from_encode_workers(
         ]
         loaded = await asyncio.gather(*tasks)
 
+    t_nixl_end = time.perf_counter()
+
     is_local = isinstance(receiver, LocalEmbeddingReceiver)
     pending: _PendingRelease | None = None if is_local else _PendingRelease(receiver)
     for group, (tensor_id, embedding) in zip(multimodal_groups, loaded, strict=True):
         group.loaded_embedding = embedding
         if pending is not None:
             pending.track(tensor_id)
+
+    # Emit PD sub-phase state transitions for llm-pd-log-viz
+    logger.info(f"req_id={request_id} Enter State 'PD-DISPATCH-E' at {t_dispatch_start}")
+    logger.info(f"req_id={request_id} Enter State 'PD-WAIT-E-RESP' at {t_dispatch_end}")
+    logger.info(f"req_id={request_id} Enter State 'PD-NIXL-RECV' at {t_resp_end}")
+    logger.info(f"req_id={request_id} Removed from 'PD-NIXL-RECV' at {t_nixl_end}")
 
     return multimodal_groups, pending
 
