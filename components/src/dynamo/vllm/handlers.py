@@ -1597,6 +1597,7 @@ class DecodeWorkerHandler(BaseWorkerHandler):
 
     async def _generate_token_mode(self, request, context, request_id):
         """Generate tokens using internal protocol format (token-in-token-out)."""
+        t_pd_start = time.perf_counter()
         # Firstly extract disaggregated params from prefill result if available
         prefill_result = request.get("prefill_result")
         if prefill_result and isinstance(prefill_result, dict):
@@ -1616,6 +1617,7 @@ class DecodeWorkerHandler(BaseWorkerHandler):
         )
 
         multi_modal_data = None
+        t_wait_e_start = time.perf_counter()
         if is_decode_only:
             # Decode mode: branch on model, not data.
             if is_qwen_vl_model(self.config.model):
@@ -1656,6 +1658,7 @@ class DecodeWorkerHandler(BaseWorkerHandler):
             multi_modal_data = await self._extract_multimodal_data(
                 request, request_id, context
             )
+        t_wait_e_end = time.perf_counter()
 
         # Build prompt from request (handles both prompt_embeds and token_ids)
         prompt, embedding_sequence_length, error = self._build_prompt_from_request(
@@ -1698,6 +1701,7 @@ class DecodeWorkerHandler(BaseWorkerHandler):
 
         trace_headers = build_trace_headers(context)
 
+        t_run_start = time.perf_counter()
         async with self._abort_monitor(context, request_id):
             try:
                 async for tok in self.generate_tokens(
@@ -1720,6 +1724,14 @@ class DecodeWorkerHandler(BaseWorkerHandler):
                 logger.warning("Initiating Dynamo Runtime shutdown.")
                 self.runtime.shutdown()
                 os._exit(1)
+
+        t_run_end = time.perf_counter()
+
+        # Emit PD state transitions for llm-pd-log-viz
+        logger.info(f"req_id={request_id} Enter State 'PD-WAITING' at {t_pd_start}")
+        logger.info(f"req_id={request_id} Enter State 'PD-WAITING-FOR-E' at {t_wait_e_start}")
+        logger.info(f"req_id={request_id} Enter State 'PD-RUNNING' at {t_run_start}")
+        logger.info(f"req_id={request_id} Removed from 'PD-RUNNING' at {t_run_end}")
 
     async def _generate_text_mode(self, request, context, request_id):
         """Generate text using OpenAI-compatible format (text-in-text-out)."""
@@ -1866,10 +1878,13 @@ class PrefillWorkerHandler(BaseWorkerHandler):
 
     async def _generate_token_mode(self, request, context, request_id):
         """Generate prefill using internal protocol format (token-in-token-out)."""
+        t_pd_start = time.perf_counter()
         # Extract and decode multimodal data if present
+        t_wait_e_start = time.perf_counter()
         multi_modal_data = await self._extract_multimodal_data(
             request, request_id, context
         )
+        t_wait_e_end = time.perf_counter()
         embedding_params = self._build_embedding_params(multi_modal_data or {})
 
         # Build prompt from request (handles both prompt_embeds and token_ids)
@@ -1926,6 +1941,7 @@ class PrefillWorkerHandler(BaseWorkerHandler):
 
         trace_headers = build_trace_headers(context)
 
+        t_run_start = time.perf_counter()
         async with self._abort_monitor(context, request_id, is_prefill=True):
             try:
                 gen = self.engine_client.generate(
@@ -1971,6 +1987,14 @@ class PrefillWorkerHandler(BaseWorkerHandler):
                 )
 
                 yield output
+
+        t_run_end = time.perf_counter()
+
+        # Emit PD state transitions for llm-pd-log-viz
+        logger.info(f"req_id={request_id} Enter State 'PD-WAITING' at {t_pd_start}")
+        logger.info(f"req_id={request_id} Enter State 'PD-WAITING-FOR-E' at {t_wait_e_start}")
+        logger.info(f"req_id={request_id} Enter State 'PD-RUNNING' at {t_run_start}")
+        logger.info(f"req_id={request_id} Removed from 'PD-RUNNING' at {t_run_end}")
 
     def _build_disaggregated_params(self, kv_transfer_params, embedding_params=None):
         disaggregated_params = {}
