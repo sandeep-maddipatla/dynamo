@@ -309,11 +309,39 @@ where
 
     wait_for_min_initial_workers(&router_client, min_initial_workers).await?;
 
-    // Get threshold value and wrap monitor for PushRouter
-    // Note: PushRouter uses active_decode_blocks_threshold for its internal logic
-    let threshold_value = worker_monitor
-        .as_ref()
-        .map(|m| m.active_decode_blocks_threshold());
+    // Get threshold value and wrap monitor for PushRouter.
+    // In KV routing mode the KvRouter (chooser) has already selected the best
+    // worker via find_best_match(), which accounts for load through the KV
+    // scheduler.  The PushRouter in KV mode acts purely as a transport layer
+    // for that pre-selected instance.
+    //
+    // Passing a busy_threshold here arms the ServiceOverloaded pre-flight check
+    // in generate_with_fault_detection().  That check compares instance_ids_free()
+    // (an ArcSwap seeded at Client::new() time from a watch-channel snapshot) against
+    // instance_ids() (a live read of the NATS/etcd watch channel).  There is a
+    // window after Client creation where the endpoint_watcher background task has
+    // not yet processed the worker's NATS registration event, so instance_source
+    // starts as [] and the ArcSwap seeding produces instance_free=[].  The
+    // monitor_instance_source task corrects this on its first iteration, but
+    // concurrent requests arriving in that window see instance_ids_free()=[] while
+    // instance_ids()=[worker] and get a false ServiceOverloaded (503).
+    //
+    // The vLLM publisher sets active_prefill_tokens=None and
+    // active_decode_blocks_threshold defaults to 1.0 (>100% capacity = impossible),
+    // so KvWorkerMonitor.is_busy() never returns true and update_free_instances()
+    // is never called to restore the list.  The check is therefore both the source
+    // of false rejections AND never performs any useful load-shedding in KV mode.
+    //
+    // In non-KV modes (Random, RoundRobin, Direct) the PushRouter IS the load
+    // balancer and no KvRouter pre-selects the worker, so the busy threshold is
+    // meaningful there.
+    let threshold_value = if router_mode == RouterMode::KV {
+        None
+    } else {
+        worker_monitor
+            .as_ref()
+            .map(|m| m.active_decode_blocks_threshold())
+    };
     let monitor_arc =
         worker_monitor.map(|m| Arc::new(m) as Arc<dyn dynamo_runtime::pipeline::WorkerLoadMonitor>);
 
