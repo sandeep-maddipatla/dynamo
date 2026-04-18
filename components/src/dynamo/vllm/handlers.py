@@ -53,7 +53,10 @@ from dynamo.runtime.logging import configure_dynamo_logging
 from .args import Config
 from .constants import EmbeddingTransferMode
 from .engine_monitor import VllmEngineMonitor
-from .multimodal_utils.hash_utils import compute_mm_uuids_from_images
+from .multimodal_utils.hash_utils import (
+    compute_mm_uuids_from_images,
+    compute_mm_uuids_from_request,
+)
 from .multimodal_utils.model import construct_qwen_decode_mm_data, is_qwen_vl_model
 from .multimodal_utils.prefill_worker_utils import MultiModalEmbeddingLoader
 
@@ -113,20 +116,24 @@ class LoRAInfo:
 
 
 def _compute_mm_uuids(
-    multi_modal_data: Dict[str, Any] | None
+    multi_modal_data: Dict[str, Any] | None,
+    request: Dict[str, Any] | None = None,
 ) -> Dict[str, list[str]] | None:
-    """
-    Compute multi_modal_uuids from multi_modal_data.
+    """Return multi_modal_uuids for the vLLM TokensPrompt, or None.
 
-    Each image gets a SHA256 hex digest as its UUID, ensuring consistent
-    hashing across the MM Router, vLLM handler, and Rust KV publisher.
+    Prefers hashing image_url entries from the original request (same on
+    both P and D workers). Falls back to hashing raw PIL images if no URL
+    entries are available. Returns None for text-only or embeds-only inputs.
     """
+    # Preferred: hash image_url entries - stable across P/D workers.
+    uuids_from_request = compute_mm_uuids_from_request(request)
+    if uuids_from_request is not None:
+        return uuids_from_request
+
     if not multi_modal_data or "image" not in multi_modal_data:
         return None
     images = multi_modal_data["image"]
-    # [gluo FIXME] Dict being returned when the mm data has been processed,
-    # in this case, we skip computing mm_uuids for now until we better understand
-    # what info should be hash on.
+    # Dict = pre-computed embeddings from encode worker; no stable URL to hash.
     if isinstance(images, dict):
         return None
     if not isinstance(images, list):
@@ -1268,7 +1275,7 @@ class BaseWorkerHandler(ABC, Generic[RequestT, ResponseT]):
                     },
                 )
         # Normal path: use token IDs
-        mm_uuids = _compute_mm_uuids(multi_modal_data)
+        mm_uuids = _compute_mm_uuids(multi_modal_data, request)
         prompt_kwargs = dict[str, Any](
             prompt_token_ids=request["token_ids"],
             multi_modal_data=multi_modal_data,
