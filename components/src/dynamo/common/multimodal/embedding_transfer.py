@@ -599,6 +599,16 @@ class NixlWriteEmbeddingSender(AbstractEmbeddingSender):
             embeddings = embeddings.clone().detach()
             fut.set_result(None)
 
+        # Ensure all device operations (squeeze/split/unsqueeze/clone) are complete
+        # before NIXL exposes the buffer for RDMA. Without this, receivers may read
+        # partially-computed embeddings, which yields non-uniform KV block hashes
+        # across workers (dynamo_kv_router block_hash mismatch warnings).
+        _dev_type = getattr(embeddings, "device", None)
+        if _dev_type is not None:
+            _backend = getattr(torch, _dev_type.type, None)
+            if _backend and hasattr(_backend, "synchronize"):
+                _backend.synchronize()
+
         # In case the same embedding tensor is sent multiple times,
         # we want to avoid potential issues with duplicated NIXL memory registration.
         desc_key = (embeddings.data_ptr(), embeddings.get_device())
