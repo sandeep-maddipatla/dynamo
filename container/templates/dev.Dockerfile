@@ -285,6 +285,16 @@ ARG WORKSPACE_DIR=/workspace
 
 # Dev environment variables (aligned with framework dev stages)
 # Framework-specific PATH additions are handled in /etc/profile.d/50-framework-paths.sh
+{% if device == "xpu" %}
+# XPU: Use /opt/venv from base image directly (contains PyTorch, vLLM, NIXL)
+ENV WORKSPACE_DIR=${WORKSPACE_DIR} \
+    DYNAMO_HOME=${WORKSPACE_DIR} \
+    RUSTUP_HOME=/home/dynamo/.rustup \
+    CARGO_HOME=/usr/local/cargo \
+    CARGO_TARGET_DIR=/workspace/target \
+    VIRTUAL_ENV=/opt/venv \
+    PATH=/opt/venv/bin:/usr/local/cargo/bin:$PATH
+{% else %}
 ENV WORKSPACE_DIR=${WORKSPACE_DIR} \
     DYNAMO_HOME=${WORKSPACE_DIR} \
     RUSTUP_HOME=/home/dynamo/.rustup \
@@ -292,6 +302,7 @@ ENV WORKSPACE_DIR=${WORKSPACE_DIR} \
     CARGO_TARGET_DIR=/workspace/target \
     VIRTUAL_ENV=/opt/dynamo/venv \
     PATH=/opt/dynamo/venv/bin:/usr/local/cargo/bin:$PATH
+{% endif %}
 
 # Copy Rust/Cargo/Maturin from the concatenated framework stages.
 # - Rust/Cargo: from `wheel_builder` (already installed there)
@@ -313,9 +324,22 @@ RUN mkdir -p /opt/dynamo/venv && \
     pip install --ignore-installed maturin[patchelf]
 {% elif framework == "vllm" %}
 # vLLM inherits upstream's system Python solve; keep dev installs in our venv.
+{% if device == "xpu" %}
+# XPU: Use /opt/venv from base image directly
+# Make /opt/venv writable by dynamo user for development (maturin develop, pip install)
+# Point /usr/local/bin/python to /opt/venv so scripts using 'python' work correctly
+# Use a wrapper script instead of symlink to ensure Python recognizes the venv context
+RUN chown -R dynamo:0 /opt/venv && \
+    ln -sf /usr/local/bin/uv /opt/venv/bin/uv && \
+    rm -f /usr/local/bin/python && \
+    echo '#!/bin/bash' > /usr/local/bin/python && \
+    echo 'exec /opt/venv/bin/python "$@"' >> /usr/local/bin/python && \
+    chmod +x /usr/local/bin/python
+{% else %}
 RUN mkdir -p /opt/dynamo/venv && \
     python3 -m venv --system-site-packages /opt/dynamo/venv && \
     ln -sf /usr/local/bin/uv /opt/dynamo/venv/bin/uv
+{% endif %}
 {% elif framework == "dynamo" %}
 # framework=none: Create venv if runtime stage didn't already provide one
 RUN if [ ! -d /opt/dynamo/venv ]; then \
