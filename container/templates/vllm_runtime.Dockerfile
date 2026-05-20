@@ -181,11 +181,10 @@ RUN --mount=type=bind,from=wheel_builder,source=/usr/local/,target=/tmp/usr/loca
     cp -r /tmp/usr/local/src/ffmpeg /usr/local/src/
 {% endif %}
 
-{% if device == "xpu" %}
-# Remove vLLM source tree left by the XPU base image to avoid pytest collection
-# conflicts (duplicate conftest.py plugins, missing relative paths).
+# Remove the vLLM source tree shipped in the base image to avoid pytest
+# collection conflicts (duplicate conftest plugin registration) and stale
+# tool scripts referencing files not present in Dynamo's build context.
 RUN rm -rf /workspace/vllm
-{% endif %}
 
 USER dynamo
 
