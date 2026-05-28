@@ -141,10 +141,10 @@ CURL
 elif [[ "${ROLE,,}" == "dit" ]]; then
     export VLLM_TARGET_DEVICE=${DIT_DEVICE_TYPE}
 
-    # Compute 0-based logical device list from TP size (e.g. TP=2 would give "0,1")
-    dit_devices=$(seq -s, 0 $(( DIT_TP - 1 )))
+    # Compute 0-based logical device list from total DiT GPUs (TP * CFG).
+    dit_devices=$(seq -s, 0 $(( DIT_TP * ${DYN_OMNI_CFG_PARALLEL_SIZE:-1} - 1 )))
 
-    echo "Starting Stage 1 (DiT) on ${DIT_DEVICE_TYPE^^} with TP=${DIT_TP}..."
+    echo "Starting Stage 1 (DiT) on ${DIT_DEVICE_TYPE^^} with TP=${DIT_TP} CFG=${DYN_OMNI_CFG_PARALLEL_SIZE:-1}..."
 
     DIT_GPUS=${dit_devices} \
     DIT_TP=${DIT_TP} \
