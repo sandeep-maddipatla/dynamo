@@ -50,7 +50,8 @@ stage_args:
       detokenize: false
 
   # Stage 1: DiT diffusion model (image generation)
-  # Note: Devices and num_gpus controlled via DIT_GPUS and DIT_TP env vars.
+  # Note: Devices controlled via DIT_GPUS env var (default: "0").
+  # Total GPUs = DIT_TP * DYN_OMNI_CFG_PARALLEL_SIZE (tensor + classifier-free-guidance parallelism).
   # oc.decode converts the env var string to proper Python type (int).
   - stage_id: 1
     stage_type: diffusion
@@ -62,10 +63,12 @@ stage_args:
       model_stage: dit
       max_num_seqs: 1
       model_arch: GlmImagePipeline
-      num_gpus: ${oc.decode:${oc.env:DIT_TP,1}}
       enforce_eager: true
       trust_remote_code: true
       distributed_executor_backend: "mp"
+      parallel_config:
+        tensor_parallel_size: ${oc.decode:${oc.env:DIT_TP,1}}
+        cfg_parallel_size: ${oc.decode:${oc.env:DYN_OMNI_CFG_PARALLEL_SIZE,1}}
     engine_input_source: [0]
     custom_process_input_func: vllm_omni.model_executor.stage_input_processors.glm_image.ar2diffusion
     # Explicit connector mapping for AR -> DiT
