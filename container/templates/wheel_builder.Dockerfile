@@ -77,9 +77,11 @@ RUN wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRO
 RUN wget --tries=3 --waitretry=5 https://raw.githubusercontent.com/intel/llm-scaler/35a14cbc08d714f460a29b7a7328df5620c8530f/vllm/patches/ai-dynamo-xpu/patches/ucx-v1.12.0.patch -O /tmp/ucx.patch
 
 # Install Intel GPU runtime packages
+# Note: intel-opencl-icd, intel-ocloc, and libze-intel-gpu1 are already provided by
+# the XPU base image; libze-intel-gpu-raytracing is no longer published in the Intel
+# GPU repo, so only the oneAPI DPC++ compiler is installed here.
 RUN apt update -y && \
-    apt-get install -y intel-opencl-icd  \
-    libze-intel-gpu-raytracing intel-ocloc intel-oneapi-compiler-dpcpp-cpp-2025.3 && \
+    apt-get install -y intel-oneapi-compiler-dpcpp-cpp-2025.3 && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 {% endif %}
 
