@@ -49,6 +49,15 @@ ENV NIXL_PLUGIN_DIR=${NIXL_LIB_DIR}/plugins
 ENV LD_LIBRARY_PATH=${NIXL_LIB_DIR}:${NIXL_PLUGIN_DIR}:/usr/local/ucx/lib:/usr/local/ucx/lib/ucx:${TORCH_LIB_DIR}:${LD_LIBRARY_PATH:-}
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
+{% if device == "xpu" %}
+# oneAPI env for XPU detection: the base no longer bakes setvars.sh and Dynamo
+# resets ENTRYPOINT to [], so without these XPU devices are not detected.
+ENV ONEAPI_ROOT=/opt/intel/oneapi
+ENV CMPLR_ROOT=/opt/intel/oneapi/compiler/2025.3
+ENV OCL_ICD_FILENAMES=/opt/intel/oneapi/compiler/2025.3/lib/libintelocl.so
+ENV PATH=/opt/intel/oneapi/compiler/2025.3/bin:/opt/intel/oneapi/mpi/2021.15/bin:${PATH}
+ENV LD_LIBRARY_PATH=/opt/intel/oneapi/compiler/2025.3/lib:/opt/intel/oneapi/compiler/2025.3/opt/compiler/lib:/opt/intel/oneapi/umf/1.0/lib:/opt/intel/oneapi/tcm/1.4/lib:/opt/intel/oneapi/tbb/2022.3/env/../lib/intel64/gcc4.8:/opt/intel/oneapi/mkl/2025.3/lib:/opt/intel/oneapi/dnnl/2025.3/lib:/opt/intel/oneapi/ccl/2021.15/lib:/opt/intel/oneapi/mpi/2021.15/lib:${LD_LIBRARY_PATH}
+{% endif %}
 {% else %}
 # Expose libnixl.so from the upstream nixl-cu${CUDA_MAJOR} PyPI wheel through a
 # stable prefix so non-Python consumers use the same NIXL copy that Python imports.
