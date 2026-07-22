@@ -50,16 +50,6 @@
       "platform": "linux/arm64"
     },
     {
-      "baseline_digest": "sha256:22b2291f0d515dbffde9d9f2333d82051b72781149fb5c2664076224dd8c53de",
-      "baseline_image": "public.ecr.aws/q9t5s3a7/vllm-ci-test-repo",
-      "baseline_sbom": "vllm-ci-test-repo@22b2291f-amd64.cdx.json",
-      "baseline_tag": "ee0da84ab9e04ac7610e28580af62c365e898389-xpu",
-      "from_digest": "sha256:22b2291f0d515dbffde9d9f2333d82051b72781149fb5c2664076224dd8c53de",
-      "from_image": "public.ecr.aws/q9t5s3a7/vllm-ci-test-repo",
-      "from_tag": "ee0da84ab9e04ac7610e28580af62c365e898389-xpu",
-      "platform": "linux/amd64"
-    },
-    {
       "baseline_digest": "sha256:043085f9298b5da0d79bfd91e162b04c0661f3cb2f03202c5b912037cf6c1ba6",
       "baseline_image": "nvcr.io/nvidia/distroless/python",
       "baseline_sbom": "python@043085f9-amd64.cdx.json",
@@ -148,6 +138,16 @@
       "from_image": "nvcr.io/nvidia/tensorrt-llm/release",
       "from_tag": "1.3.0rc22",
       "platform": "linux/arm64"
+    },
+    {
+      "baseline_digest": "sha256:26109489bdc218a7d05ca73aa76b047e13d11871aa646a4f926e5f1988ae3e6b",
+      "baseline_image": "public.ecr.aws/q9t5s3a7/vllm-ci-test-repo",
+      "baseline_sbom": "vllm-ci-test-repo@26109489-amd64.cdx.json",
+      "baseline_tag": "752a3a504485790a2e8491cacbb35c137339ad34-xpu",
+      "from_digest": "sha256:26109489bdc218a7d05ca73aa76b047e13d11871aa646a4f926e5f1988ae3e6b",
+      "from_image": "public.ecr.aws/q9t5s3a7/vllm-ci-test-repo",
+      "from_tag": "752a3a504485790a2e8491cacbb35c137339ad34-xpu",
+      "platform": "linux/amd64"
     }
   ],
   "entry_schema": {
@@ -162,6 +162,6 @@
     "platform": "platform pinned for layer-prefix verification, e.g. linux/amd64"
   },
   "format": "CycloneDX 1.6 JSON, slim filter (drop properties/hashes/dependencies; keep evidence). Hard cap 5 MB per file.",
-  "generated_at": "2026-07-23T15:35:15+00:00",
+  "generated_at": "2026-07-24T02:18:09+00:00",
   "schema_version": 2
 }

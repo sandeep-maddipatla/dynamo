@@ -73,9 +73,9 @@ vllm:
   xpu:
     base_image: public.ecr.aws/q9t5s3a7/vllm-ci-test-repo
     runtime_image: public.ecr.aws/q9t5s3a7/vllm-ci-test-repo
-    base_image_tag: ee0da84ab9e04ac7610e28580af62c365e898389-xpu
-    runtime_image_tag: ee0da84ab9e04ac7610e28580af62c365e898389-xpu
-    baseline_sbom: vllm-ci-test-repo@22b2291f
+    base_image_tag: 752a3a504485790a2e8491cacbb35c137339ad34-xpu
+    runtime_image_tag: 752a3a504485790a2e8491cacbb35c137339ad34-xpu
+    baseline_sbom: vllm-ci-test-repo@26109489
   cpu:
     base_image: ubuntu
     runtime_image: vllm/vllm-openai-cpu
