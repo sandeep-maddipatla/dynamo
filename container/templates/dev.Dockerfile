@@ -197,7 +197,8 @@ RUN if [ ! -e /usr/bin/python3 ]; then \
 # Copy NIXL SDK material for dev stage compilation.
 # cargo build needs NIXL headers plus linkable -lnixl, -lnixl_build, and -lnixl_common.
 # - SGLang: Copy NIXL/UCX/libfabric/gdrcopy binaries from wheel_builder (not in upstream lmsysorg/sglang runtime).
-# - vLLM CUDA: Reuse upstream vLLM's Python-wheel NIXL libs and copy only headers beside them.
+# - vLLM CUDA/XPU: Reuse upstream vLLM's Python-wheel NIXL libs and copy only headers beside them.
+#   Neither upstream image ships headers, so they come from wheel_builder's source build.
 # - trtllm/none: NIXL/UCX are already present in runtime (no-op).
 ARG TARGETARCH
 {% if framework == "vllm" and device == "cuda" %}
@@ -223,10 +224,18 @@ RUN --mount=from=wheel_builder,target=/wheel_builder \
             --python-version "${PYTHON_VERSION}" \
             --prefix /opt/dynamo/nixl \
             --headers-src /wheel_builder/opt/nvidia/nvda_nixl/include; \
+{% elif framework == "vllm" and device == "xpu" %}
+    elif [ "${FRAMEWORK}" = "vllm" ]; then \
+        install_nixl_from_wheel \
+            --cuda-major 12 \
+            --site-packages "/opt/venv/lib/python${PYTHON_VERSION}/site-packages" \
+            --prefix /opt/dynamo/nixl \
+            --headers-src /wheel_builder/opt/intel/intel_nixl/include; \
 {% endif %}
     fi
 
-{% if device == "xpu" %}
+{% if device == "xpu" and framework != "vllm" %}
+# SGLang XPU copies wheel_builder's source-built NIXL into the runtime image.
 ENV NIXL_LIB_DIR=/opt/intel/intel_nixl/lib/x86_64-linux-gnu  \
     NIXL_PLUGIN_DIR=/opt/intel/intel_nixl/lib/x86_64-linux-gnu/plugins \
     NIXL_PREFIX=/opt/intel/intel_nixl
@@ -235,11 +244,11 @@ ENV NIXL_LIB_DIR=/opt/intel/intel_nixl/lib/x86_64-linux-gnu  \
 ENV NIXL_PREFIX=/opt/nvidia/nvda_nixl \
     NIXL_LIB_DIR=/opt/nvidia/nvda_nixl/lib/x86_64-linux-gnu \
     NIXL_PLUGIN_DIR=/opt/nvidia/nvda_nixl/lib/x86_64-linux-gnu/plugins
-{% elif framework == "trtllm" or (framework == "vllm" and device == "cuda") %}
-# trtllm and vLLM CUDA dev images inherit upstream containers that ship NIXL
+{% elif framework == "trtllm" or (framework == "vllm" and device in ("cuda", "xpu")) %}
+# trtllm and vLLM CUDA/XPU dev images inherit upstream containers that ship NIXL
 # inside Python wheels. These env vars provide a stable prefix for source builds.
-# For vLLM CUDA, /opt/dynamo/nixl is a symlink to the wheel's
-# .nixl_cu${CUDA_MAJOR}.mesonpy.libs directory, with headers added by the dev stage.
+# For vLLM, /opt/dynamo/nixl is a symlink to the wheel's
+# .nixl_cu*.mesonpy.libs directory, with headers added by the dev stage.
 ENV NIXL_PREFIX=/opt/dynamo/nixl \
     NIXL_LIB_DIR=/opt/dynamo/nixl \
     NIXL_PLUGIN_DIR=/opt/dynamo/nixl/plugins

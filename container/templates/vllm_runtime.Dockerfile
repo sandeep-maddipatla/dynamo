@@ -31,8 +31,12 @@ WORKDIR /workspace
 
 ENV DYNAMO_HOME=/opt/dynamo
 ENV HOME=/home/dynamo
-{% if device != "cuda" %}
+{% if device == "cpu" %}
 ENV PATH=/usr/local/ucx/bin:/usr/local/bin/etcd:${PATH}
+{% elif device == "xpu" %}
+# The upstream XPU image ships its own UCX at /opt/ucx. Keep /usr/local/ucx/lib off
+# LD_LIBRARY_PATH below: it would shadow the NIXL plugins' RUNPATH.
+ENV PATH=/opt/ucx/bin:/usr/local/bin/etcd:${PATH}
 {% else %}
 ENV PATH=/usr/local/bin/etcd:${PATH}
 {% endif %}
@@ -40,20 +44,34 @@ ENV PATH=/usr/local/bin/etcd:${PATH}
 {% if device != "cuda" %}
 ARG SITE_PACKAGES=/usr/local/lib/python${PYTHON_VERSION}/dist-packages
 ENV TORCH_LIB_DIR=${SITE_PACKAGES}/torch/lib
+ENV VIRTUAL_ENV=/opt/venv
+{% endif %}
 {% if device == "xpu" %}
-ENV NIXL_PREFIX=/opt/intel/intel_nixl
-ENV NIXL_LIB_DIR=${NIXL_PREFIX}/lib/x86_64-linux-gnu
+# Expose libnixl.so from the nixl-cu12 wheel the upstream XPU image already ships,
+# as the CUDA path below does. NIXL has no level-zero backend, so a from-source XPU
+# build would yield the same POSIX+UCX plugin set this wheel already carries.
+#
 # vLLM 0.27.1's XPU image installs the oneAPI runtime and SYCL headers in
 # /opt/venv through the intel-sycl-rt wheel. Do not set ONEAPI_ROOT to the
 # removed /opt/intel/oneapi tree: Triton gives that variable priority over its
 # wheel-metadata fallback and would search a nonexistent compiler include path.
+ARG VENV_SITE_PACKAGES=/opt/venv/lib/python${PYTHON_VERSION}/site-packages
+ENV NIXL_PREFIX=/opt/dynamo/nixl \
+    NIXL_LIB_DIR=/opt/dynamo/nixl \
+    NIXL_PLUGIN_DIR=/opt/dynamo/nixl/plugins
+COPY --chmod=755 container/deps/vllm/install_nixl_from_wheel.sh /usr/local/bin/install_nixl_from_wheel
+RUN install_nixl_from_wheel \
+    --cuda-major 12 \
+    --site-packages "${VENV_SITE_PACKAGES}" \
+    --prefix "${NIXL_PREFIX}" \
+    --skip-headers
+ENV LD_LIBRARY_PATH=${NIXL_LIB_DIR}:${NIXL_PLUGIN_DIR}:${TORCH_LIB_DIR}:${LD_LIBRARY_PATH:-}
+ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 {% elif device == "cpu" %}
 ENV NIXL_PREFIX=/opt/nvidia/nvda_nixl
 ENV NIXL_LIB_DIR=${NIXL_PREFIX}/lib/x86_64-linux-gnu
-{% endif %}
 ENV NIXL_PLUGIN_DIR=${NIXL_LIB_DIR}/plugins
 ENV LD_LIBRARY_PATH=${NIXL_LIB_DIR}:${NIXL_PLUGIN_DIR}:/usr/local/ucx/lib:/usr/local/ucx/lib/ucx:${TORCH_LIB_DIR}:${LD_LIBRARY_PATH:-}
-ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 {% else %}
 # Expose libnixl.so from the upstream nixl-cu${CUDA_MAJOR} PyPI wheel through a
@@ -124,19 +142,17 @@ RUN SITE_PACKAGES="$(python3 -c 'import site; print(site.getsitepackages()[0])')
         find "$CUBINS_DIR" -type d -exec chmod g+rwx {} + ; \
     fi
 
-{% if device != "cuda" %}
-# Copy UCX and NIXL from wheel_builder for CPU/XPU devices
-# (CUDA devices use NIXL from upstream vLLM wheels)
+{% if device == "cpu" %}
+# Copy UCX and NIXL from wheel_builder for CPU devices.
+# (CUDA and XPU use the NIXL wheels their upstream runtime image already ships.)
 COPY --from=wheel_builder /usr/local/ucx /usr/local/ucx
 COPY --chown=dynamo:0 --from=wheel_builder ${NIXL_PREFIX} ${NIXL_PREFIX}
-{% if device == "xpu" %}
-# XPU NIXL uses lib/x86_64-linux-gnu; copy to NIXL_LIB_DIR to ensure lib dir is populated
-COPY --chown=dynamo:0 --from=wheel_builder /opt/intel/intel_nixl/lib/x86_64-linux-gnu/. ${NIXL_LIB_DIR}/
-{% endif %}
 # Copy NIXL Python wheels
 COPY --chown=dynamo:0 --from=wheel_builder /opt/dynamo/dist/nixl/ /opt/dynamo/wheelhouse/nixl/
 COPY --chown=dynamo:0 --from=wheel_builder /workspace/nixl/build/src/bindings/python/nixl-meta/nixl-*.whl /opt/dynamo/wheelhouse/nixl/
+{% endif %}
 
+{% if device != "cuda" %}
 # Install RDMA libraries required for UCX to find RDMA devices
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -193,7 +209,7 @@ RUN --mount=type=cache,id=uv-root-{{ context.dynamo.uv_version }},target=/root/.
     uv pip install {{ pip_target }} --no-deps \
         "transformers==${TRANSFORMERS_VERSION}" "tokenizers==${TOKENIZERS_VERSION}"
 
-{% if device != "cuda" %}
+{% if device == "cpu" %}
 # NIXL meta package always tries to find a cuda-backend
 # https://github.com/ai-dynamo/nixl/blob/v1.1.0/src/bindings/python/nixl-meta/nixl/__init__.py
 #
@@ -209,14 +225,31 @@ RUN --mount=type=cache,id=uv-root-{{ context.dynamo.uv_version }},target=/root/.
         {{ pip_target }} --force-reinstall --no-deps \
         "nixl==${NIXL_VERSION}" \
         "nixl-cu12==${NIXL_VERSION}"
-{% endif %}
 
-# Install device-specific NIXL wheels for non-CUDA devices.
-# These are custom-built in wheel_builder and required for dev builds to link against NIXL libraries.
-{% if device != "cuda" %}
+# Install device-specific NIXL wheels built in wheel_builder; dev builds link
+# against the NIXL libraries they carry.
 RUN --mount=type=cache,id=uv-root-{{ context.dynamo.uv_version }},target=/root/.cache/uv,sharing=locked \
     export UV_CACHE_DIR=/root/.cache/uv && \
     uv pip install {{ pip_target }} --no-deps /opt/dynamo/wheelhouse/nixl/nixl*.whl
+{% elif device == "xpu" %}
+# XPU installs no NIXL; assert the base image's instead. KVBM's nixl-sys was linked
+# against wheel_builder's NIXL at ${NIXL_REF}, so a mismatch here is an ABI break.
+RUN set -eu; \
+    NIXL_VERSION="${NIXL_REF#v}"; \
+    for pkg in nixl nixl-cu12; do \
+        got=$(/opt/venv/bin/python -c "import importlib.metadata as m; print(m.version('$pkg'))" 2>/dev/null || true); \
+        if [ -z "$got" ]; then \
+            echo "ERROR: $pkg is not installed in /opt/venv; the upstream XPU image no longer ships it." >&2; \
+            echo "       Either restore the runtime NIXL install for XPU or pick a base image that ships it." >&2; \
+            exit 1; \
+        fi; \
+        if [ "$got" != "${NIXL_VERSION}" ]; then \
+            echo "ERROR: $pkg==$got in the base image but NIXL_REF is ${NIXL_REF} (expected ${NIXL_VERSION})." >&2; \
+            echo "       Align vllm.nixl_ref in container/context.yaml with the base image, or bump the base image." >&2; \
+            exit 1; \
+        fi; \
+        echo "OK: $pkg==$got matches NIXL_REF ${NIXL_REF}"; \
+    done
 {% endif %}
 
 {% if target not in ("dev", "local-dev") %}
