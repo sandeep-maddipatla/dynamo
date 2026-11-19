@@ -516,6 +516,31 @@ python -m dynamo.frontend &
 python -m dynamo.sglang --model Qwen/Qwen3-0.6B --mem-fraction-static 0.20 &
 ```
 
+**Intel Xeon CPU variant** (SGLang, amd64 only) — pass `--device=cpu` so `run.sh` starts the container without a GPU runtime. The image reuses the upstream SGLang venv at `/opt/.venv` and already has the NIXL Python bindings installed. Run Dynamo's own `uv` installs with `UV_CONFIG_FILE` unset: the base points it at a config whose PyTorch CPU indexes take precedence over PyPI.
+```bash
+# 1. Build SGLang local-dev image for Intel Xeon CPUs
+container/render.py --framework=sglang --device=cpu --target=local-dev
+docker build --build-arg USER_UID=$(id -u) --build-arg USER_GID=$(id -g) \
+  -t dynamo:latest-sglang-cpu-local-dev \
+  -f container/sglang-local-dev-cpu-amd64-rendered.Dockerfile .
+
+# 2. Run development container with workspace mounted
+container/run.sh --image dynamo:latest-sglang-cpu-local-dev --device=cpu \
+  --mount-workspace -v $HOME/.cache:/home/dynamo/.cache -p 8000:8000 -it
+
+# From this point forward, commands run inside the container started in step 2.
+
+# 3. Editable install of dynamo into /opt/.venv
+cd lib/bindings/python && env -u UV_CONFIG_FILE maturin develop --uv && cd -
+env -u UV_CONFIG_FILE uv pip install --no-deps -e /workspace
+
+# 4. Start infrastructure services, then frontend + SGLang CPU backend
+nats-server -js &
+etcd --listen-client-urls http://0.0.0.0:2379 --advertise-client-urls http://0.0.0.0:2379 --data-dir /tmp/etcd &
+python -m dynamo.frontend &
+python -m dynamo.sglang --model Qwen/Qwen3-0.6B --device cpu &
+```
+
 ### Production Workflow
 ```bash
 # 1. Build production runtime image (runs as non-root dynamo user)

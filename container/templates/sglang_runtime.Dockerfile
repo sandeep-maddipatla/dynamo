@@ -161,6 +161,16 @@ $NIXL_PLUGIN_DIR:\
 ${LD_LIBRARY_PATH:-}
 {% endif %}
 
+{% if device == "cpu" %}
+# The Xeon base ships no NIXL, so its Python bindings are installed for every
+# target: dev/local-dev skip the prebuilt Dynamo wheels below but still need
+# `import nixl`. accelerate is needed by the diffusion pipelines
+# (enable_model_cpu_offload), as on CUDA; the base already ships distro.
+RUN {{ pip_install }} --no-deps \
+        /opt/dynamo/wheelhouse/nixl/nixl*.whl \
+        "accelerate==1.13.0"
+{% endif %}
+
 {% if target not in ("dev", "local-dev") %}
 # Runtime target installs only the prebuilt Dynamo wheels. SGLang and its NIXL
 # packages come from the upstream lmsysorg/sglang runtime image; --no-deps keeps
@@ -176,15 +186,12 @@ RUN pip install --no-deps \
         /opt/dynamo/wheelhouse/nixl/nixl*.whl \
         "distro==1.9.0"
 {% elif device == "cpu" %}
-# The Xeon base already ships distro; accelerate is needed by the diffusion
-# pipelines (enable_model_cpu_offload), as on CUDA. GPU Memory Service and
-# ModelExpress are GPU-only and not installed.
+# NIXL and accelerate were installed above. GPU Memory Service and ModelExpress
+# are GPU-only and not installed.
 RUN {{ pip_install }} --no-deps \
         /opt/dynamo/wheelhouse/ai_dynamo_runtime*.whl \
         /opt/dynamo/wheelhouse/ai_dynamo*any.whl \
-        /opt/dynamo/wheelhouse/aisim-*.whl \
-        /opt/dynamo/wheelhouse/nixl/nixl*.whl \
-        "accelerate==1.13.0"
+        /opt/dynamo/wheelhouse/aisim-*.whl
 {% else %}
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     export PIP_CACHE_DIR=/root/.cache/pip && \

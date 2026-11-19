@@ -173,7 +173,8 @@ ARG PYTHON_VERSION
 
 # Copy NIXL SDK material for dev stage compilation.
 # cargo build needs NIXL headers plus linkable -lnixl, -lnixl_build, and -lnixl_common.
-# - SGLang: Copy NIXL/UCX/libfabric/gdrcopy binaries from wheel_builder (not in upstream lmsysorg/sglang runtime).
+# - SGLang CUDA: Copy NIXL/UCX/libfabric/gdrcopy binaries from wheel_builder (not in upstream lmsysorg/sglang runtime).
+# - SGLang XPU/CPU: no-op; the runtime stage already carries the from-source NIXL SDK and UCX.
 # - vLLM CUDA: Reuse upstream vLLM's Python-wheel NIXL libs and copy only headers beside them.
 # - trtllm/none: NIXL/UCX are already present in runtime (no-op).
 ARG TARGETARCH
@@ -210,25 +211,26 @@ RUN --mount=from=wheel_builder,target=/wheel_builder \
             exit 1; \
         fi; \
     fi; \
-    if [ "${FRAMEWORK}" = "sglang" ]; then \
-        test -d /wheel_builder/usr/local/ucx; \
-        test -d /wheel_builder/opt/nvidia/nvda_nixl; \
-        mkdir -p /opt/nvidia /usr/include /usr/lib64 /etc/ld.so.conf.d; \
-        cp -r /wheel_builder/opt/nvidia/nvda_nixl /opt/nvidia/; \
-        cp -r /wheel_builder/usr/local/ucx /usr/local/; \
-        cp -r /wheel_builder/usr/local/libfabric /usr/local/; \
-        cp /wheel_builder/usr/include/gdrapi.h /usr/include/; \
-        cp /wheel_builder/usr/lib64/libgdrapi.so* /usr/lib64/; \
-        echo "/usr/lib64" >> /etc/ld.so.conf.d/gdrcopy.conf; \
-{% if framework == "vllm" and device == "cuda" %}
-    elif [ "${FRAMEWORK}" = "vllm" ]; then \
-        install_nixl_from_wheel \
-            --cuda-major "${CUDA_MAJOR}" \
-            --python-version "${PYTHON_VERSION}" \
-            --prefix /opt/dynamo/nixl \
-            --headers-src /wheel_builder/opt/nvidia/nvda_nixl/include; \
+{% if framework == "sglang" and device == "cuda" %}
+    test -d /wheel_builder/usr/local/ucx; \
+    test -d /wheel_builder/opt/nvidia/nvda_nixl; \
+    mkdir -p /opt/nvidia /usr/include /usr/lib64 /etc/ld.so.conf.d; \
+    cp -r /wheel_builder/opt/nvidia/nvda_nixl /opt/nvidia/; \
+    cp -r /wheel_builder/usr/local/ucx /usr/local/; \
+    cp -r /wheel_builder/usr/local/libfabric /usr/local/; \
+    cp /wheel_builder/usr/include/gdrapi.h /usr/include/; \
+    cp /wheel_builder/usr/lib64/libgdrapi.so* /usr/lib64/; \
+    echo "/usr/lib64" >> /etc/ld.so.conf.d/gdrcopy.conf; \
+{% elif framework == "sglang" %}
+    test -f "${NIXL_PREFIX}/include/nixl.h"; \
+    test -d /usr/local/ucx/lib; \
+{% elif framework == "vllm" and device == "cuda" %}
+    install_nixl_from_wheel \
+        --cuda-major "${CUDA_MAJOR}" \
+        --python-version "${PYTHON_VERSION}" \
+        --prefix /opt/dynamo/nixl \
+        --headers-src /wheel_builder/opt/nvidia/nvda_nixl/include; \
 {% endif %}
-    fi; \
     mkdir -p /etc/profile.d && echo 'umask 002' > /etc/profile.d/00-umask.sh; \
     if [ -e /usr/bin/python3 ]; then cp -a /usr/bin/python3 /tmp/python3.pretools; fi
 
@@ -322,6 +324,15 @@ ENV WORKSPACE_DIR=${WORKSPACE_DIR} \
     CARGO_TARGET_DIR=/workspace/target \
     VIRTUAL_ENV=/opt/dynamo/venv \
     PATH=/opt/dynamo/venv/bin:/usr/local/cargo/bin:$PATH
+{% elif framework == "sglang" and device == "cpu" %}
+# CPU SGLang: Use the lmsysorg/sglang:*-xeon runtime's upstream /opt/.venv
+ENV WORKSPACE_DIR=${WORKSPACE_DIR} \
+    DYNAMO_HOME=${WORKSPACE_DIR} \
+    RUSTUP_HOME=/home/dynamo/.rustup \
+    CARGO_HOME=/usr/local/cargo \
+    CARGO_TARGET_DIR=/workspace/target \
+    VIRTUAL_ENV=/opt/.venv \
+    PATH=/opt/.venv/bin:/usr/local/cargo/bin:$PATH
 {% else %}
 {# CPU/XPU vLLM and XPU SGLang share this: both use the runtime's upstream /opt/venv. #}
 # CPU/XPU vLLM: Use runtime's /opt/venv
@@ -354,6 +365,15 @@ RUN chown -R dynamo:0 /opt/venv && \
     echo '#!/bin/bash' > /usr/local/bin/python && \
     echo 'exec /opt/venv/bin/python "$@"' >> /usr/local/bin/python && \
     chmod +x /usr/local/bin/python
+{% elif device == "cpu" %}
+# SGLang CPU: reuse the upstream /opt/.venv (same reasoning as XPU). The runtime
+# stage already pinned /usr/local/bin/uv, and /opt/.venv/bin is first on PATH,
+# so neither a uv copy nor a python wrapper is needed. The venv is root-owned
+# 0755 in the base; hand it to dynamo:0 and make it group-writable so
+# `maturin develop` / `uv pip install -e` work for the dynamo user and, after
+# local-dev remaps that user's UID (which leaves these files on the old UID),
+# through its group-0 membership. One RUN, so the venv is copied up only once.
+RUN chown -R dynamo:0 /opt/.venv && chmod -R g+w /opt/.venv
 {% else %}
 # SGLang CUDA: Create a writable Dynamo venv and seed it from the upstream
 # SGLang venv. The runtime keeps its packages outside the system Python's
@@ -419,6 +439,15 @@ RUN --mount=type=bind,source=./container/deps/requirements.dev.txt,target=/tmp/r
         --requirement /tmp/requirements.dev.txt \
         --requirement /tmp/requirements.test.txt && \
     uv pip install --python ${VIRTUAL_ENV}/bin/python --force-reinstall --no-deps pytest
+{% elif device == "cpu" and framework == "sglang" %}
+    # Unset the base's UV_CONFIG_FILE: its PyTorch CPU indexes would shadow PyPI
+    # (see sglang_runtime.Dockerfile). Neither requirements file pulls torch.
+    unset UV_CONFIG_FILE && \
+    uv pip install \
+        --python ${VIRTUAL_ENV}/bin/python \
+        --requirement /tmp/requirements.dev.txt \
+        --requirement /tmp/requirements.test.txt && \
+    uv pip install --python ${VIRTUAL_ENV}/bin/python --force-reinstall --no-deps pytest
 {% else %}
     uv pip install \
         --index-strategy unsafe-best-match \
@@ -450,9 +479,9 @@ WORKDIR ${WORKSPACE_DIR}
 #   runtimes already added it).
 RUN --mount=type=bind,source=./container/launch_message/dev.txt,target=/opt/dynamo/launch_message.txt \
     mkdir -p ${WORKSPACE_DIR} && chmod g+w ${WORKSPACE_DIR} && \
-{% if device == "xpu" and framework == "sglang" %}
+{% if device in ("xpu", "cpu") and framework == "sglang" %}
     { uv pip uninstall --python ${VIRTUAL_ENV}/bin/python ai-dynamo ai-dynamo-runtime 2>/dev/null || true; } && \
-    uv pip install --python ${VIRTUAL_ENV}/bin/python maturin[patchelf] && \
+    {% if device == "cpu" %}env -u UV_CONFIG_FILE {% endif %}uv pip install --python ${VIRTUAL_ENV}/bin/python maturin[patchelf] && \
 {% else %}
     { uv pip uninstall ai-dynamo ai-dynamo-runtime 2>/dev/null || true; } && \
     if command -v uv >/dev/null 2>&1; then \
