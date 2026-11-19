@@ -158,7 +158,7 @@ def validate_args(args):
             "cuda_version": ["13.1"],
         },
         "sglang": {
-            "device": ["cuda", "xpu"],
+            "device": ["cuda", "xpu", "cpu"],
             "target": [
                 "runtime",
                 "dev",
@@ -233,6 +233,21 @@ def validate_args(args):
                     f"XPU builds require --platform linux/amd64, "
                     f"got '{args.platform}'"
                 )
+            if args.framework == "sglang" and args.device == "cpu":
+                # The SGLang CPU base (lmsysorg/sglang:*-xeon) is amd64 only.
+                if args.platform != "amd64":
+                    raise ValueError(
+                        f"SGLang CPU builds require --platform linux/amd64, "
+                        f"got '{args.platform}'"
+                    )
+                # dev.Dockerfile's SGLang NIXL setup copies CUDA-only
+                # artifacts (libfabric, gdrcopy), so dev/local-dev are not
+                # wired up for CPU yet.
+                if args.target in ("dev", "local-dev"):
+                    raise ValueError(
+                        f"SGLang CPU supports --target runtime, wheel_builder "
+                        f"or base, got '{args.target}'"
+                    )
             return
 
         raise ValueError(

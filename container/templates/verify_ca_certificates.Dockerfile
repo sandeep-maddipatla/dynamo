@@ -6,7 +6,7 @@
 RUN set -eu; \
     . /etc/os-release; \
     case "${ID}:${VERSION_ID:-unknown}" in \
-        ubuntu:22.04|ubuntu:24.04) ca_min="20260816ubuntu0.${VERSION_ID}.1" ;; \
+        ubuntu:22.04|ubuntu:24.04|ubuntu:26.04) ca_min="20260816ubuntu0.${VERSION_ID}.1" ;; \
         debian:12) ca_min="20250419~deb12u2" ;; \
         debian:13) ca_min="20250419+deb13u1" ;; \
         *) echo "Unsupported CA package baseline: ${ID}:${VERSION_ID:-unknown}" >&2; exit 1 ;; \

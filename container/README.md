@@ -127,6 +127,13 @@ docker build -t dynamo:latest-sglang-xpu-runtime -f container/sglang-runtime-xpu
 container/run.sh --image dynamo:latest-sglang-xpu-runtime --device=xpu -it
 ```
 
+Intel Xeon CPU variant (SGLang, amd64 only) — pass `--device=cpu` to both `render.py` and `run.sh`:
+```bash
+container/render.py --framework=sglang --device=cpu --target=runtime
+docker build -t dynamo:latest-sglang-cpu-runtime -f container/sglang-runtime-cpu-amd64-rendered.Dockerfile .
+container/run.sh --image dynamo:latest-sglang-cpu-runtime --device=cpu -it
+```
+
 ### 2. test image (layers test deps on top of runtime):
 ```bash
 # Build test image from a runtime image (for running tests locally)
@@ -249,6 +256,10 @@ docker build -t dynamo:latest-trtllm-runtime -f container/rendered.Dockerfile .
 container/render.py --framework=sglang --device=xpu --target=runtime
 docker build -t dynamo:latest-sglang-xpu-runtime -f container/sglang-runtime-xpu-amd64-rendered.Dockerfile .
 
+# Build SGLang runtime image for Intel Xeon CPUs (on lmsysorg/sglang:*-xeon)
+container/render.py --framework=sglang --device=cpu --target=runtime
+docker build -t dynamo:latest-sglang-cpu-runtime -f container/sglang-runtime-cpu-amd64-rendered.Dockerfile .
+
 # Build Triton runtime image (prebuilt Dynamo wheels from PyPI on the upstream
 # Triton release image). --network=host lets the build reach PyPI.
 # The Triton release is selected with --build-arg RUNTIME_IMAGE_TAG=<tag>
@@ -258,7 +269,8 @@ docker build --network=host --build-arg RUNTIME_IMAGE_TAG=26.09-py3 -t dynamo:la
 ```
 
 The `--device` flag selects the accelerator backend. It defaults to `cuda`; pass `--device=xpu`
-to produce an Intel XPU image (currently supported for `--framework=sglang`).
+to produce an Intel XPU image, or `--device=cpu` for an Intel Xeon CPU image (both supported for
+`--framework=sglang` and `--framework=vllm`).
 
 After building, use `run.sh` to launch the container (see [run.sh - Container Runtime Manager](#runsh---container-runtime-manager) below for full options):
 ```bash

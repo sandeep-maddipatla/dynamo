@@ -347,8 +347,13 @@ get_options() {
                 DEVICE_FLAGS+=" --group-add ${RENDER_GID}"
             fi
             ;;
+        cpu)
+            GPUS="none"
+            GPU_STRING=""
+            RUNTIME=""
+            ;;
         *)
-            error 'ERROR: Unknown --device value (expected cuda|xpu): ' "$DEVICE"
+            error 'ERROR: Unknown --device value (expected cuda|xpu|cpu): ' "$DEVICE"
             ;;
     esac
 
@@ -382,7 +387,7 @@ show_help() {
     echo "  [--dry-run print docker commands without running]"
     echo "  [--hf-home|--hf-cache directory to volume mount as the hf home, default is NONE unless mounting workspace]"
     echo "  [--gpus gpus to enable, default is 'all', 'none' disables gpu support]"
-    echo "  [--device accelerator backend: 'cuda' (default) or 'xpu' (Intel GPU via /dev/dri + render group)]"
+    echo "  [--device accelerator backend: 'cuda' (default) or 'xpu' (Intel GPU via /dev/dri + render group), or 'cpu' (no accelerator)]"
     echo "  [--use-nixl-gds add volume mounts and capabilities needed for NVIDIA GPUDirect Storage]"
     echo "  [--network network mode for container, default is 'host']"
     echo "           Options: 'host' (default), 'bridge', 'none', 'container:name'"

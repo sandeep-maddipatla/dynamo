@@ -185,6 +185,19 @@ sglang:
     # to avoid affecting sglang-cuda or other frameworks.
     nixl_ref: v1.5.0
     nixl_ucx_ref: v1.23.0-rc1
+  cpu:
+    # Intel Xeon (AMX/AVX-512) CPU build. The runtime is the upstream Xeon image
+    # (Ubuntu 26.04, SGLang in a uv venv at /opt/.venv, no NIXL). The wheel
+    # builder runs on plain Ubuntu 22.04, as for vllm cpu, so the runtime wheel
+    # repairs to manylinux_2_35 and the from-source NIXL/UCX run on the newer
+    # runtime glibc. amd64 only.
+    base_image: ubuntu
+    base_image_tag: "22.04"
+    runtime_image: lmsysorg/sglang
+    runtime_image_tag: v0.5.23-xeon
+    # No baseline_sbom: cpu images are unshipped and skip the compliance stages.
+    nixl_ref: v1.5.0
+    nixl_ucx_ref: v1.23.0-rc1
   # Builds the NIXL C++ SDK in wheel_builder so the dev stage can link nixl-sys
   # (see templates/dev.Dockerfile). Runtime stays on the upstream lmsysorg/sglang
   # NIXL Python stack — its wheel COPY is narrowed to ai_dynamo*.whl so the SDK

@@ -7,6 +7,19 @@
 ########## Runtime Image #########
 ##################################
 
+{#
+  The lmsysorg/sglang:*-xeon CPU base keeps SGLang in a uv-managed /opt/.venv
+  with no pip, so CPU installs go through uv into that venv. The base exports
+  UV_CONFIG_FILE=/opt/.venv/uv.toml, whose PyTorch CPU indexes would otherwise
+  shadow PyPI for every package that index also mirrors (certifi, pillow, ...).
+  An explicit UV_CONFIG_FILE wins over --no-config, so it is unset instead.
+  CUDA and XPU keep their base image's pip.
+#}
+{% if device == "cpu" %}
+{% set pip_install = "env -u UV_CONFIG_FILE uv pip install --no-cache --python /opt/.venv/bin/python" %}
+{% else %}
+{% set pip_install = "pip install --break-system-packages" %}
+{% endif %}
 FROM ${RUNTIME_IMAGE}:${RUNTIME_IMAGE_TAG} AS pre_runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
@@ -15,6 +28,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 {% include "templates/verify_ca_certificates.Dockerfile" %}
 
 ENV GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=/etc/ssl/certs/ca-certificates.crt
+{% if device == "cpu" %}
+# The Xeon base puts /opt/.venv first on PATH but does not export VIRTUAL_ENV;
+# the dev stage and uv both key off it.
+ENV VIRTUAL_ENV=/opt/.venv
+{% endif %}
 
 ARG MODELEXPRESS_VERSION
 {% if device == "cuda" %}
@@ -74,9 +92,12 @@ RUN apt-get update && \
 # Install the TurboJPEG runtime used by frontend JPEG decoding.
 # libjemalloc2 lets CPython and C code opt into jemalloc via
 # LD_PRELOAD; it is not preloaded by default.
+{% if device == "cpu" %}
+# Ubuntu 26.04 (the Xeon CPU base) renamed libturbojpeg to libturbojpeg0.
+{% endif %}
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        libturbojpeg \
+        {{ "libturbojpeg0" if device == "cpu" else "libturbojpeg" }} \
         libjemalloc2 && \
     rm -rf /var/lib/apt/lists/* && \
     ldconfig && \
@@ -101,18 +122,19 @@ RUN SITE_PACKAGES="$(python3 -c 'import site; print(site.getsitepackages()[0])')
         find "$CUBINS_DIR" -type d -exec chmod g+rwx {} + ; \
     fi
 
-{% if device == "xpu" %}
-{# XPU runtime: NIXL + UCX are needed for P2P transport on Intel GPUs.
+{% if device in ("xpu", "cpu") %}
+{# XPU/CPU runtime: neither upstream base ships NIXL, so Dynamo's from-source
+   NIXL + UCX are copied in for P2P/disaggregated transport.
    CUDA sglang runtime does NOT include NIXL/UCX (matching upstream main);
    those are only added in the dev stage for build-time linking. #}
-ENV NIXL_PREFIX=/opt/intel/intel_nixl
+ENV NIXL_PREFIX={{ "/opt/intel/intel_nixl" if device == "xpu" else "/opt/nvidia/nvda_nixl" }}
 ENV NIXL_LIB_DIR=$NIXL_PREFIX/lib/x86_64-linux-gnu
 ENV NIXL_PLUGIN_DIR=$NIXL_LIB_DIR/plugins
 
 # Copy UCX and NIXL from wheel_builder
 COPY --from=wheel_builder /usr/local/ucx /usr/local/ucx
 COPY --chown=dynamo:0 --from=wheel_builder $NIXL_PREFIX $NIXL_PREFIX
-COPY --chown=dynamo:0 --from=wheel_builder /opt/intel/intel_nixl/lib/x86_64-linux-gnu/. ${NIXL_LIB_DIR}/
+COPY --chown=dynamo:0 --from=wheel_builder ${NIXL_LIB_DIR}/. ${NIXL_LIB_DIR}/
 
 COPY --chown=dynamo:0 --from=wheel_builder /opt/dynamo/dist/nixl/ /opt/dynamo/wheelhouse/nixl/
 COPY --chown=dynamo:0 --from=wheel_builder /workspace/nixl/build/src/bindings/python/nixl-meta/nixl-*.whl /opt/dynamo/wheelhouse/nixl/
@@ -125,7 +147,7 @@ RUN apt-get update && \
         ibverbs-utils \
         libibumad3 \
         libnuma1 \
-        librdmacm1 \
+        {{ "librdmacm1t64" if device == "cpu" else "librdmacm1" }} \
         ibverbs-providers && \
     rm -rf /var/lib/apt/lists/*
 
@@ -153,6 +175,16 @@ RUN pip install --no-deps \
         /opt/dynamo/wheelhouse/aisim-*.whl \
         /opt/dynamo/wheelhouse/nixl/nixl*.whl \
         "distro==1.9.0"
+{% elif device == "cpu" %}
+# The Xeon base already ships distro; accelerate is needed by the diffusion
+# pipelines (enable_model_cpu_offload), as on CUDA. GPU Memory Service and
+# ModelExpress are GPU-only and not installed.
+RUN {{ pip_install }} --no-deps \
+        /opt/dynamo/wheelhouse/ai_dynamo_runtime*.whl \
+        /opt/dynamo/wheelhouse/ai_dynamo*any.whl \
+        /opt/dynamo/wheelhouse/aisim-*.whl \
+        /opt/dynamo/wheelhouse/nixl/nixl*.whl \
+        "accelerate==1.13.0"
 {% else %}
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     export PIP_CACHE_DIR=/root/.cache/pip && \
@@ -208,7 +240,7 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
 RUN --mount=type=bind,source=./container/deps/requirements.common.txt,target=/tmp/requirements.common.txt \
     --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     export PIP_CACHE_DIR=/root/.cache/pip && \
-    pip install --break-system-packages --no-deps $(grep -E '^nvtx==' /tmp/requirements.common.txt)
+    {{ pip_install }} --no-deps $(grep -E '^nvtx==' /tmp/requirements.common.txt)
 
 {% if device == "xpu" %}
 # The upstream SGLang XPU base installs uv to /root/.local/bin, outside any Python
@@ -252,8 +284,8 @@ RUN --mount=type=bind,source=./container/compliance,target=/tmp/compliance/compl
 {% else %}
 # mooncake and PyNvVideoCodec are CUDA-only. The mooncake floor names the CUDA 13
 # distribution, and PyNvVideoCodec decodes on NVDEC through libnvcuvid, so both
-# are inert on the XPU image and neither is present in its base. The diffusers pin
-# is stripped too: the published XPU base installs its own diffusion extra, and
+# are inert on the XPU/CPU images and neither is present in their bases. The diffusers pin
+# is stripped too: the published XPU/CPU bases install their own diffusion extra, and
 # this pin is tested on CUDA only. The patterns are
 # anchored to the line start so they cannot match inside another requirement, and
 # the checks fail the build if either package arrives by another route -- a filter
@@ -269,7 +301,7 @@ RUN --mount=type=bind,source=./container/deps/requirements.sglang.txt,target=/tm
     export PIP_CACHE_DIR=/root/.cache/pip && \
     grep -v -e '^PyNvVideoCodec' -e '^mooncake-transfer-engine-cuda13' -e '^diffusers' \
         /tmp/requirements.sglang.txt > /tmp/requirements.sglang.nonvidia.txt && \
-    pip install --break-system-packages --force-reinstall --no-deps \
+    {{ pip_install }} --force-reinstall --no-deps \
         --requirement /tmp/requirements.sglang.nonvidia.txt && \
     rm -f /tmp/requirements.sglang.nonvidia.txt && \
     python3 -c "import importlib.util,sys; sys.exit(1 if importlib.util.find_spec('PyNvVideoCodec') else 0)" && \
@@ -363,11 +395,13 @@ RUN rm -rf \
         /opt/nvidia/nsight-compute/*/host/target-linux-*/plugins/efa_metrics && \
     [ -z "$(find /usr/local /opt -xdev -type d -name efa_metrics 2>/dev/null)" ]
 
-{% if device in ("cuda", "xpu") %}
+{% if device in ("cuda", "xpu", "cpu") %}
 # Copy the in-tree VP9 ffmpeg from wheel_builder: versioned shared libs
 # (libav*.so*, libsw*.so*) + libvpx + the in-tree CLI binary that imageio targets
-# via IMAGEIO_FFMPEG_EXE. On CUDA the upstream ffmpeg was purged above; the XPU
-# base ships none. Either way this is the only ffmpeg CLI in the image; the
+# via IMAGEIO_FFMPEG_EXE. On CUDA the upstream ffmpeg was purged above and the XPU
+# base ships none, so there this is the only ffmpeg CLI in the image. The CPU
+# base's apt ffmpeg is not purged (the image is unshipped) and stays at
+# /usr/bin/ffmpeg; IMAGEIO_FFMPEG_EXE selects this copy instead. The
 # video-generation handler (DiffGenerator) encodes libvpx-vp9 with it, and the
 # media-ffmpeg runtime wheel links its libav* for frontend video decoding. Same
 # pattern as vllm_runtime.Dockerfile.
@@ -388,7 +422,7 @@ ENV IMAGEIO_FFMPEG_EXE=/usr/local/bin/ffmpeg
 # gap where SGLang shipping no encoder passed every PR gate.
 {% include "templates/ffmpeg_encoder_guard.Dockerfile" %}
 
-# Frontend video decoding is part of the shipped SGLang CUDA and XPU contract.
+# Frontend video decoding is part of the SGLang CUDA, XPU and CPU contract.
 # Fail the image build if the runtime wheel was accidentally compiled without it.
 {% if target not in ("dev", "local-dev") %}
 RUN python3 -c 'from dynamo.llm import MediaDecoder; assert hasattr(MediaDecoder(), "enable_video")'
@@ -397,7 +431,7 @@ RUN python3 -c 'from dynamo.llm import MediaDecoder; assert hasattr(MediaDecoder
 ENV IMAGEIO_FFMPEG_EXE=
 {% endif %}
 
-{% if device != "xpu" and target not in ("dev", "local-dev") %}
+{% if device == "cuda" and target not in ("dev", "local-dev") %}
 # Add generic UCX aliases beside NIXL's private libraries so native consumers
 # use the same implementation without breaking UCX's $ORIGIN-based core and
 # module lookup. The wheel's auditwheel dependency directory is deliberately
@@ -441,7 +475,7 @@ RUN --mount=type=bind,source=./container/launch_message/runtime.txt,target=/opt/
    shells read. #}
 RUN chmod 755 /opt/dynamo/.launch_screen && \
     echo 'cat /opt/dynamo/.launch_screen' >> /etc/bash.bashrc && \
-{%- if device == "xpu" %}
+{%- if device != "cuda" %}
     ln -sf /workspace /sgl-workspace/dynamo
 {%- else %}
     ln -s /workspace /sgl-workspace/dynamo && \
@@ -496,7 +530,7 @@ USER dynamo
 ARG DYNAMO_COMMIT_SHA
 ENV DYNAMO_COMMIT_SHA=${DYNAMO_COMMIT_SHA}
 
-{% if device == "xpu" %}
+{% if device != "cuda" %}
 CMD ["bash"]
 {% else %}
 ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
@@ -506,8 +540,9 @@ CMD []
 
 {# Compliance is skipped for dev/local-dev: those images are not shipped (release
    ships runtime/frontend/operator/planner/snapshot-agent), compliance-extract
-   already skips them, and their pre_runtime carries no dynamo venv to scan. #}
-{% if target not in ("dev", "local-dev") %}
+   already skips them, and their pre_runtime carries no dynamo venv to scan.
+   cpu likewise: unshipped, and no baseline_sbom to subtract. #}
+{% if target not in ("dev", "local-dev") and device != "cpu" %}
 {% include "templates/compliance.Dockerfile" %}
 {% endif %}
 
@@ -523,10 +558,10 @@ FROM pre_runtime AS runtime
 # PyNvVideoCodec cannot import. Ensure the K8s pod/runtimeClass does not drop it.
 ENV NVIDIA_DRIVER_CAPABILITIES=video,compute,utility
 {% endif %}
-{% if target not in ("dev", "local-dev") %}
+{% if target not in ("dev", "local-dev") and device != "cpu" %}
 COPY --from=licenses /legal /legal
 {% endif %}
-{% if device != "xpu" %}
+{% if device == "cuda" %}
 ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
 CMD []
 {% endif %}
