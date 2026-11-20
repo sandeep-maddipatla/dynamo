@@ -56,9 +56,10 @@
 #   - sglang uses `--site-packages "$(... sysconfig ...)"` because the
 #     upstream image installs into system Python via
 #     `pip install --break-system-packages`, not a venv.
-{%- if framework == "sglang" and device == "xpu" %}
-#     sglang XPU is excluded: its lmsysorg/sglang:*-xpu base installs into
-#     /opt/venv, so it takes the VIRTUAL_ENV branch like vllm xpu/cpu.
+{%- if framework == "sglang" and device != "cuda" %}
+#     sglang XPU/CPU are excluded: their lmsysorg/sglang:*-xpu / *-xeon bases
+#     install into a venv (/opt/venv, /opt/.venv), so they take the
+#     VIRTUAL_ENV branch like vllm xpu/cpu.
 {%- endif %}
 #   - native always runs (image filter "{framework}-{target}[-efa]"), attributing
 #     the from-source binaries the python/rust/dpkg scanners miss (ffmpeg, libvpx,
@@ -107,14 +108,15 @@ COPY --from=epp /rust-licenses /tmp/rust-licenses
 ARG BASELINE_SBOM_FILE="{{ compliance_baseline_sbom }}"
 ARG TARGETARCH
 # Resolve where this image's Python packages live at runtime rather than per
-# framework: venv-based images export VIRTUAL_ENV (trtllm, vllm xpu/cpu, dev),
-# while images that install into system Python leave it unset (vllm cuda via
-# `pip --system`, sglang via `pip --break-system-packages`). Pick the matching
+# framework: venv-based images export VIRTUAL_ENV (trtllm, vllm xpu/cpu,
+# sglang xpu/cpu, dev), while images that install into system Python leave it
+# unset (vllm cuda via `pip --system`, sglang cuda via
+# `pip --break-system-packages`). Pick the matching
 # generator flag so it always finds the deps — passing an empty
 # `--venv ${VIRTUAL_ENV}` is what broke system-Python images.
 {#- The enterprise variant has both: the NIM venv layers over system Python,
     where Dynamo installs. #}
-RUN {% if framework == "sglang" and device != "xpu" %}PKG_ARG="--site-packages $(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"{% elif variant == "enterprise" %}PKG_ARG="--venv ${VIRTUAL_ENV} --site-packages $(/usr/bin/python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"{% else %}if [ -n "${VIRTUAL_ENV:-}" ]; then PKG_ARG="--venv ${VIRTUAL_ENV}"; else PKG_ARG="--site-packages $(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"; fi{% endif %} && \
+RUN {% if framework == "sglang" and device == "cuda" %}PKG_ARG="--site-packages $(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"{% elif variant == "enterprise" %}PKG_ARG="--venv ${VIRTUAL_ENV} --site-packages $(/usr/bin/python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"{% else %}if [ -n "${VIRTUAL_ENV:-}" ]; then PKG_ARG="--venv ${VIRTUAL_ENV}"; else PKG_ARG="--site-packages $(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"; fi{% endif %} && \
     python3 -m compliance.generators \
     --ecosystem {{ compliance_ecosystems }} \
     ${PKG_ARG} \
@@ -140,11 +142,12 @@ RUN python3 -m compliance.policy.validate \
 # Files, not just the SBOM, because statically-bundled codec .so's don't appear
 # as components.
 #
-# CUDA only for now. The XPU image is not currently published on NGC, so it does
-# not yet require the codecs to be removed. It would also fail this gate today:
-# the purge the gate depends on sits in the `device == "cuda"` block of
-# vllm_runtime.Dockerfile, so the XPU image still carries its base image's media
-# stack. Enable both together if that changes.
+# CUDA only for now. The XPU and CPU images are not currently published on NGC,
+# so they do not yet require the codecs to be removed. They would also fail this
+# gate today: the purge the gate depends on sits in the `device == "cuda"` blocks
+# of vllm_runtime.Dockerfile and sglang_runtime.Dockerfile, so the XPU and CPU
+# images still carry their base images' media stacks. Enable both together if
+# that changes.
 {% if device == "cuda" %}
 RUN python3 -m compliance.scan_codecs \
         --root / \
@@ -199,7 +202,7 @@ ARG BASELINE_SBOM_FILE="{{ compliance_baseline_sbom }}"
 ARG TARGETARCH
 {#- Dynamo's Rust wheels are in system Python on the enterprise variant, not the NIM venv. #}
 RUN if [ "$ENABLE_SOURCE_ARCHIVAL" = "true" ]; then \
-        {% if framework == "sglang" and device != "xpu" %}RUST_PKG_ARG="--rust-site-packages $(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"{% elif variant == "enterprise" %}RUST_PKG_ARG="--rust-site-packages $(/usr/bin/python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"{% else %}if [ -n "${VIRTUAL_ENV:-}" ]; then RUST_PKG_ARG="--rust-venv ${VIRTUAL_ENV}"; else RUST_PKG_ARG="--rust-site-packages $(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"; fi{% endif %} && \
+        {% if framework == "sglang" and device == "cuda" %}RUST_PKG_ARG="--rust-site-packages $(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"{% elif variant == "enterprise" %}RUST_PKG_ARG="--rust-site-packages $(/usr/bin/python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"{% else %}if [ -n "${VIRTUAL_ENV:-}" ]; then RUST_PKG_ARG="--rust-venv ${VIRTUAL_ENV}"; else RUST_PKG_ARG="--rust-site-packages $(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"; fi{% endif %} && \
         python3 -m compliance.collect_sources \
             {{ compliance_source_ecosystem_flags }} \
             --output-zip /sources.zip \

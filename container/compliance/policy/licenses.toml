@@ -522,6 +522,20 @@ name = "python3.12-venv"
 allow = ["GPL-2.0-only"]
 reason = "Mere aggregation; system component"
 
+# Ubuntu 26.04 (lmsysorg/sglang:*-xeon) carries libpython3.14-* in the base, and
+# rdma-core's python3 dependency adds the interpreter packages on top.
+[[exceptions]]
+type = "dpkg"
+name = "python3.14"
+allow = ["GPL-2.0-only"]
+reason = "Mere aggregation; system component"
+
+[[exceptions]]
+type = "dpkg"
+name = "python3.14-minimal"
+allow = ["GPL-2.0-only"]
+reason = "Mere aggregation; system component"
+
 [[exceptions]]
 type = "dpkg"
 name = "unminimize"
