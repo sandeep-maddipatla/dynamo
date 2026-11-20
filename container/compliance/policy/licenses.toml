@@ -1396,6 +1396,12 @@ reason = "Mere aggregation; system component"
 
 [[exceptions]]
 type = "dpkg"
+name = "libturbojpeg"
+allow = ["LGPL-2.1-only"]
+reason = "Mere aggregation; system component. Ubuntu 22.04's copyright file (2.1.2) licenses only the debian/* packaging under LGPL-2.1; the library itself is IJG/BSD-3-Clause/Zlib"
+
+[[exceptions]]
+type = "dpkg"
 name = "libgcrypt20"
 allow = ["LGPL-2.1-or-later"]
 reason = "Mere aggregation; system component"

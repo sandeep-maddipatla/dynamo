@@ -726,9 +726,8 @@ ENTRYPOINT []
 
 {# Compliance is skipped for dev/local-dev: those images are not shipped (release
    ships runtime/frontend/operator/planner/snapshot-agent), compliance-extract
-   already skips them, and their pre_runtime carries no dynamo venv to scan.
-   cpu likewise: unshipped, and no baseline_sbom to subtract. #}
-{% if target not in ("dev", "local-dev") and device != "cpu" %}
+   already skips them, and their pre_runtime carries no dynamo venv to scan. #}
+{% if target not in ("dev", "local-dev") %}
 {% include "templates/compliance.Dockerfile" %}
 {% endif %}
 
@@ -738,6 +737,6 @@ FROM pre_runtime AS runtime
 # Verify artifact capture and delivery imports in the shipped runtime, not only the test image.
 RUN python3 -c 'import dynamo.artifacts.vllm.capture; import dynamo.artifacts.runtime'
 {% endif %}
-{% if target not in ("dev", "local-dev") and device != "cpu" %}
+{% if target not in ("dev", "local-dev") %}
 COPY --from=licenses /legal /legal
 {% endif %}
