@@ -57,6 +57,12 @@ Flags:
                             references any more. The upsert key includes
                             from_tag, so without this a tag bump appends
                             and leaves the previous tag's rows behind.
+  --image-family sglang-xpu Image family for a repository that serves several
+                            baselines (lmsysorg/sglang: -cu130-runtime, -xpu,
+                            -xeon), recorded on the row. --prune-superseded
+                            then prunes only rows of the same family, and a
+                            capture without a family never prunes a row that
+                            has one. Omit for single-family images.
 
 Dependencies on the runner:
   - docker buildx (registry manifest resolution)
@@ -557,17 +563,41 @@ def prune_superseded(
     the registry and counts a lookup failure as drift, so a superseded tag turns
     the drift check red as soon as the vendor garbage-collects it.
 
+    An entry with an image_family prunes only rows of the same family; one
+    without prunes only rows without. One repository can serve several families
+    (lmsysorg/sglang: -cu130-runtime, -xpu, -xeon), and a different tag there is
+    a sibling, not an older version.
+
     Returns the SBOM filenames removed from the corpus.
     """
     entries = manifest.setdefault("entries", [])
     key = (entry["from_image"], entry["from_tag"], entry["platform"])
+    family = entry.get("image_family")
 
     def _superseded(e: dict) -> bool:
         return (
-            e.get("from_image") == entry["from_image"]
+            e.get("image_family") == family
+            and (family is not None or e.get("from_image") == entry["from_image"])
             and e.get("platform") == entry["platform"]
             and e.get("from_tag") != entry["from_tag"]
         )
+
+    if family is None:
+        families = sorted(
+            {
+                e["image_family"]
+                for e in entries
+                if e.get("image_family") and e.get("from_image") == entry["from_image"]
+            }
+        )
+        if families:
+            logger.warning(
+                "%s has rows in image families (%s) that this capture, with no "
+                "--image-family, will not prune; pass --image-family if it "
+                "refreshes one of them",
+                entry["from_image"],
+                ", ".join(families),
+            )
 
     def _fresh(e: dict) -> bool:
         return (e.get("from_image"), e.get("from_tag"), e.get("platform")) == key
@@ -626,6 +656,7 @@ def capture(
     from_sbom_cache_dir: Path | None = None,
     no_from_sbom_cache: bool = False,
     prune_superseded_entries: bool = False,
+    image_family: str | None = None,
 ) -> int:
     from_image, from_tag = split_ref(from_ref)
     baseline_image, baseline_tag = split_ref(baseline_ref)
@@ -842,6 +873,8 @@ def capture(
     }
     if skip_layer_prefix_check:
         entry["layer_prefix_check_skipped"] = True
+    if image_family:
+        entry["image_family"] = image_family
 
     if dry_run:
         logger.info("--dry-run: not writing %s or manifest", sbom_path)
@@ -955,6 +988,15 @@ def main(argv: list[str] | None = None) -> int:
             "Use on a tag bump, where the upsert key never matches the old row."
         ),
     )
+    parser.add_argument(
+        "--image-family",
+        help=(
+            "Image family recorded on the row (e.g. sglang-xpu, sglang-xeon) for "
+            "a repository that serves several baselines. --prune-superseded then "
+            "prunes only rows of the same family; a capture without a family "
+            "never prunes a row that has one. Omit for single-family images."
+        ),
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
 
@@ -977,6 +1019,7 @@ def main(argv: list[str] | None = None) -> int:
             from_sbom_cache_dir=args.from_sbom_cache_dir,
             no_from_sbom_cache=args.no_from_sbom_cache,
             prune_superseded_entries=args.prune_superseded,
+            image_family=args.image_family,
         )
     except Exception:  # pragma: no cover
         logger.exception("Unhandled error during capture")
