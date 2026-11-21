@@ -166,19 +166,14 @@ RUN if [ -n "${BASELINE_SBOM_FILE}" ]; then \
 # Files, not just the SBOM, because statically-bundled codec .so's don't appear
 # as components.
 #
-# CUDA and CPU. The XPU image is not currently published on NGC, so it does not
-# yet require the codecs to be removed. It would also fail this gate today: the
-# purge the gate depends on is enabled for CUDA and CPU only in
-# vllm_runtime.Dockerfile and sglang_runtime.Dockerfile, so the XPU image still
-# carries its base image's media stack. Enable both together if that changes.
-{% if device in ("cuda", "cpu") %}
+# Every device: the CUDA, XPU and CPU runtime templates all run the codec
+# purge this gate depends on (vllm_runtime.Dockerfile, sglang_runtime.Dockerfile).
 RUN python3 -m compliance.scan_codecs \
         --root / \
         --policy /opt/compliance/policy/codec_policy.yaml \
         --sbom /legal/osrb.cdx.json \
         --image {{ framework }}-{{ target }} \
         --fail-on-findings -v
-{% endif %}
 
 
 #######################################

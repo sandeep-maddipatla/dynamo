@@ -329,8 +329,7 @@ RUN --mount=type=bind,source=./container/deps/requirements.sglang.txt,target=/tm
 # tests/dependencies/test_no_software_video_codecs.py -- when this purge
 # becomes redundant, delete it and keep those assertions.
 #
-# CUDA and CPU. On XPU the codec-bearing wheels from the SGLang install are not
-# purged yet; every device gets the in-tree VP9 ffmpeg below. Matches the
+# Every device. Each also gets the in-tree VP9 ffmpeg below. Matches the
 # equivalent purge in vllm_runtime.Dockerfile.
 {% if device == "cuda" %}
 RUN set -eux; \
@@ -388,25 +387,28 @@ RUN set -eux; \
         -o -name 'libfaac*.so*' -o -name 'libvo-aacenc*.so*' \
         -o -name 'libaacplus*.so*' \) -delete; \
     ldconfig
-{% elif device == "cpu" %}
-# The Xeon base (Ubuntu 26.04) ships the distro ffmpeg + libx264/libx265 stack,
-# so it gets the same exact-match purge as vllm_runtime.Dockerfile rather than
-# CUDA's `--auto-remove`, which can sweep the gcc/make toolchain. Without NVDEC
-# there is no hardware path to replace the software H.264/H.265 decoders, so
-# video input on the CPU image is limited to what the in-tree ffmpeg decodes.
-{% set codec_purge_dependents = "glycin-loaders glycin-thumbnailers libgdk-pixbuf-2.0-0 libglycin-2-0 libheif-plugin-aomdec libheif1 libjack-jackd2-0 libopenmpt0t64 libpulse0 librsvg2-2 libsdl2-2.0-0 libsdl2-classic libsndfile1" -%}
+{% elif device in ("xpu", "cpu") %}
+# XPU and CPU use the same exact-match purge as vllm_runtime.Dockerfile rather
+# than CUDA's `--auto-remove`, which can sweep the gcc/make toolchain. The Xeon
+# base (Ubuntu 26.04) ships the distro ffmpeg + libx264/libx265 stack; the XPU
+# base ships no distro ffmpeg today, so its purge matches nothing and is a no-op
+# that still fails the build if a later base adds one. Without NVDEC there is no
+# hardware path to replace the software H.264/H.265 decoders, so video input on
+# XPU/CPU is limited to what the in-tree ffmpeg decodes (VP9, not H.264).
+{% set codec_venv = "/opt/.venv" if device == "cpu" else "/opt/venv" -%}
+{% set codec_purge_dependents = "glycin-loaders glycin-thumbnailers libgdk-pixbuf-2.0-0 libglycin-2-0 libheif-plugin-aomdec libheif1 libjack-jackd2-0 libopenmpt0t64 libpulse0 librsvg2-2 libsdl2-2.0-0 libsdl2-classic libsndfile1" if device == "cpu" else "" -%}
 {% include "templates/codec_apt_purge.Dockerfile" %}
 
 # torch.inductor / Triton JIT need the host toolchain the purge must not touch.
 RUN --mount=type=bind,source=./container/deps/vllm/validate_torch_compile_smoke.py,target=/tmp/validate_torch_compile_smoke.py,readonly \
     python3 /tmp/validate_torch_compile_smoke.py
 
-# Remove the codec-bearing wheels from /opt/.venv. Each bundles its own full
+# Remove the codec-bearing wheels from {{ codec_venv }}. Each bundles its own full
 # ffmpeg carrying software H.264/H.265/AAC, and PyAV also ships GPL
-# libx264/libx265. The base also leaves its uv download cache in
-# /root/.cache/uv, which holds unpacked copies of the same wheels.
+# libx264/libx265. The bases also leave their pip/uv download caches in
+# /root/.cache, which can hold unpacked copies of the same wheels.
 RUN set -eux; \
-    env -u UV_CONFIG_FILE uv pip uninstall --python /opt/.venv/bin/python \
+    env -u UV_CONFIG_FILE uv pip uninstall --python {{ codec_venv }}/bin/python \
         av decord decord2 opencv-python opencv-python-headless torchcodec \
         || true; \
     SITE_PACKAGES="$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"; \
@@ -419,7 +421,7 @@ RUN set -eux; \
         /root/.cache/uv /root/.cache/pip; \
     # The uninstall above is `|| true`, so a package that survived (rename, new
     # bundling) must fail here. decord2 imports as `decord`.
-    python3 -c "import importlib.util as u, sys; left=[m for m in ('cv2', 'av', 'decord', 'torchcodec') if u.find_spec(m)]; sys.exit('ERROR: still in /opt/.venv: ' + ', '.join(left) if left else 0)"; \
+    python3 -c "import importlib.util as u, sys; left=[m for m in ('cv2', 'av', 'decord', 'torchcodec') if u.find_spec(m)]; sys.exit('ERROR: still in {{ codec_venv }}: ' + ', '.join(left) if left else 0)"; \
     find /usr /opt /workspace /sgl-workspace -xdev \
         \( -type f -o -type l \) \
         \( -name 'libx264*.so*' -o -name 'libx265*.so*' \
@@ -551,12 +553,11 @@ RUN SITE_PACKAGES="$(python3 -c 'import site; print(site.getsitepackages()[0])')
 # still catching any stray third-party libav*/ffmpeg. This adds the extra
 # non-FFmpeg AAC/H.264 implementation names the scan's deny_globs don't list.
 #
-# CUDA and CPU, for the same reason as the purge above: this asserts that the
-# purge worked, and on XPU there is no purge to assert. Left ungated it would fail that
-# build on the base image's own libraries -- which is precisely what happened to
-# the first version of this change, where gating the purge alone turned a working
-# XPU build into a failing one.
-{% if device in ("cuda", "cpu") %}
+# Every device, now that each runs the purge above: this asserts that the purge
+# worked. It must stay paired with the purge -- ungated without one, it failed an
+# XPU build on the base image's own libraries, which is what happened to the
+# first version of this change.
+{% if device in ("cuda", "xpu", "cpu") %}
 RUN set -eux; \
     remaining="$(find /usr /opt /workspace /sgl-workspace -xdev \
         \( -type f -o -type l \) \

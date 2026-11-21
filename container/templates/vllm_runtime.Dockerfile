@@ -353,12 +353,13 @@ RUN apt-get update && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 {% endif %}
 
-{% if device in ("cuda", "cpu") and variant != "enterprise" %}{# The enterprise base ships no distro FFmpeg stack to purge. #}
-{% if device == "cpu" %}
-# CPU applies the same purge as CUDA to vllm/vllm-openai-cpu (Ubuntu 22.04),
-# which ships the same distro ffmpeg + libx264/libx265 stack. Without NVDEC
-# there is no hardware path to replace the software H.264/H.265 decoders, so
-# video input on the CPU image is limited to what the in-tree ffmpeg decodes.
+{% if device in ("cuda", "xpu", "cpu") and variant != "enterprise" %}{# The enterprise base ships no distro FFmpeg stack to purge. #}
+{% if device != "cuda" %}
+# XPU and CPU apply the same purge as CUDA to vllm/vllm-openai-xpu (Ubuntu
+# 24.04, the same dependents as CUDA) and vllm/vllm-openai-cpu (Ubuntu 22.04),
+# which ship the same distro ffmpeg + libx264/libx265 stack. Without NVDEC there
+# is no hardware path to replace the software H.264/H.265 decoders, so video
+# input there is limited to what the in-tree ffmpeg decodes (VP9, not H.264).
 {% endif %}
 # The upstream vllm/vllm-openai base image ships a GPL/GPL-3.0 ffmpeg built
 # against libx264/libx265/libmp3lame. Purge ONLY the explicitly-named ffmpeg +
@@ -558,7 +559,7 @@ RUN --mount=type=bind,source=./container/deps/requirements.vllm.txt,target=/tmp/
 # tool scripts referencing files not present in Dynamo's build context.
 RUN rm -rf /workspace/vllm
 
-{% if device in ("cuda", "cpu") %}
+{% if device in ("cuda", "xpu", "cpu") %}
 # Transitional: this exists only until no upstream brings these in.
 # The permanent statement of what may ship is
 # tests/dependencies/test_no_software_video_codecs.py -- when this purge
@@ -576,7 +577,7 @@ RUN rm -rf /workspace/vllm
 # no H.264 is built. Direct rm makes the removal robust regardless of how the
 # base image's pip is configured; the guards fail the build if any of them survive.
 RUN set -eux; \
-    SYS_PYTHON={{ "/opt/venv/bin/python" if device == "cpu" else "/usr/bin/python3" }}; \
+    SYS_PYTHON={{ "/usr/bin/python3" if device == "cuda" else "/opt/venv/bin/python" }}; \
     OPENCV_VERSION="$("${SYS_PYTHON}" -m pip show opencv-python-headless 2>/dev/null | awk '/^Version:/{print $2}')"; \
     if [ -z "${OPENCV_VERSION}" ]; then \
         OPENCV_VERSION="$("${SYS_PYTHON}" -m pip show opencv-python 2>/dev/null | awk '/^Version:/{print $2}')"; \
