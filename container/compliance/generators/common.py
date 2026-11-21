@@ -319,17 +319,30 @@ def load_subtract_keys(sbom_path: Path) -> set[tuple[str, str]]:
     return keys
 
 
+class IntersectKeys(set):
+    """Baseline keys whose matching components are KEPT rather than dropped.
+
+    Passed in place of the plain subtraction set (--intersect-sbom), so every
+    generator's existing `subtract_baseline(components, subtract)` call renders
+    only the components the baseline image already ships, i.e. the complement
+    of the normal delta. Kept as a set subclass so the generators need no change.
+    """
+
+
 def subtract_baseline(
     components: list[Component], baseline_keys: set[tuple[str, str]]
 ) -> list[Component]:
     """Drop components whose (name, version) appears in baseline_keys.
 
+    With IntersectKeys, keep only those components instead.
+
     Logs the count of dropped components so build logs make the
     subtraction visible — auditors and engineers can see exactly how
     many components NGC/baseline-owners are owning.
     """
+    intersect = isinstance(baseline_keys, IntersectKeys)
     if not baseline_keys:
-        return components
+        return [] if intersect else components
 
     # Some SBOM producers normalize Python names as hyphenated PEP 503 names
     # (e.g. vllm-test-utils) while dist-info METADATA can surface underscores
@@ -345,18 +358,26 @@ def subtract_baseline(
     kept: list[Component] = []
     dropped = 0
     for c in components:
-        if (c.name, c.version) in baseline_keys or (
+        in_baseline = (c.name, c.version) in baseline_keys or (
             _norm_name(c.name),
             c.version,
-        ) in normalized_baseline_keys:
+        ) in normalized_baseline_keys
+        if in_baseline != intersect:
             dropped += 1
             continue
         kept.append(c)
-    logger.info(
-        "Subtracted %d baseline components; %d remain for NOTICES",
-        dropped,
-        len(kept),
-    )
+    if intersect:
+        logger.info(
+            "Kept %d baseline components for NOTICES; dropped %d added above it",
+            len(kept),
+            dropped,
+        )
+    else:
+        logger.info(
+            "Subtracted %d baseline components; %d remain for NOTICES",
+            dropped,
+            len(kept),
+        )
     return kept
 
 

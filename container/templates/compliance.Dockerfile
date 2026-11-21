@@ -134,6 +134,30 @@ RUN python3 -m compliance.policy.validate \
         --policy /opt/compliance/policy/licenses.toml \
         --input /legal/osrb-deps.csv
 
+{% if device in ("xpu", "cpu") %}
+# Base-image attribution. XPU/CPU subtract a self-baseline (the upstream
+# vllm/vllm-openai-{xpu,cpu} / lmsysorg/sglang image itself), so the NOTICES
+# above cover only what Dynamo adds, and those upstream images ship no
+# attribution bundle of their own. Render the baseline's own components into
+# /legal/base/ (the inverse of the subtraction above), so /legal + /legal/base
+# together list everything the image ships, without overlap. Runs after the
+# policy gate on purpose: the gate stays on what Dynamo adds. Native is skipped
+# (Dynamo's own builds, never in a baseline); CUDA subtracts NVIDIA-owned
+# floors and is unchanged.
+RUN if [ -n "${BASELINE_SBOM_FILE}" ]; then \
+        if [ -n "${VIRTUAL_ENV:-}" ]; then PKG_ARG="--venv ${VIRTUAL_ENV}"; else PKG_ARG="--site-packages $(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"; fi && \
+        mkdir -p /legal/base && \
+        python3 -m compliance.generators \
+            --ecosystem python,rust,dpkg \
+            ${PKG_ARG} \
+            --rust-licenses-dir /tmp/rust-licenses \
+            --output-dir /legal/base \
+            --policy /opt/compliance/policy/licenses.toml \
+            --intersect-sbom /opt/compliance/base_sboms/${BASELINE_SBOM_FILE}-${TARGETARCH}.cdx.json \
+            -v; \
+    fi
+{% endif %}
+
 # Media-codec allowlist gate: scans THIS stage's filesystem (==
 # the shipped image tree, since licenses is FROM pre_runtime) and fails the build
 # if a media-codec library/binary (a third-party libav*, libx264/265, or a stray

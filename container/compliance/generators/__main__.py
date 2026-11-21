@@ -120,7 +120,8 @@ def main(argv: list[str] | None = None) -> int:
         "--native-image",
         help="Image name to filter native_packages entries (required for native)",
     )
-    parser.add_argument(
+    baseline = parser.add_mutually_exclusive_group()
+    baseline.add_argument(
         "--subtract-sbom",
         type=Path,
         default=None,
@@ -131,6 +132,18 @@ def main(argv: list[str] | None = None) -> int:
             "NOTICES attributes only what's installed above the baseline. "
             "Pass this from the runtime's licenses stage; omit it for "
             "from-image == baseline cases (no subtraction needed)."
+        ),
+    )
+    baseline.add_argument(
+        "--intersect-sbom",
+        type=Path,
+        default=None,
+        help=(
+            "The inverse of --subtract-sbom: keep ONLY components whose "
+            "(name, version) is in this baseline SBOM, i.e. what the base image "
+            "already ships. Renders NOTICES for the base image's own components "
+            "alongside the delta NOTICES. The native ecosystem is skipped: its "
+            "entries are Dynamo's own from-source builds, never in a baseline."
         ),
     )
     parser.add_argument(
@@ -196,6 +209,11 @@ def main(argv: list[str] | None = None) -> int:
     subtract: set[tuple[str, str]] | None = None
     if args.subtract_sbom is not None:
         subtract = common.load_subtract_keys(args.subtract_sbom)
+    elif args.intersect_sbom is not None:
+        subtract = common.IntersectKeys(common.load_subtract_keys(args.intersect_sbom))
+        if not subtract:
+            logger.error("--intersect-sbom %s has no components", args.intersect_sbom)
+            return 1
 
     # Each generator writes its NOTICES-<Eco>.txt FLAT at --output-dir (no
     # per-ecosystem subdir) and returns its (already baseline-subtracted)
@@ -204,6 +222,9 @@ def main(argv: list[str] | None = None) -> int:
     all_components: list = []
     for eco in args.ecosystem:
         comps = None
+        if eco == "native" and isinstance(subtract, common.IntersectKeys):
+            logger.info("Skipping native under --intersect-sbom: never in a baseline")
+            continue
         try:
             if eco == "rust":
                 if not search_paths:
@@ -284,7 +305,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     # Unified OSRB outputs (delta-only — the accumulated components are already
-    # baseline-subtracted): one merged CSV with a Notes column + one CycloneDX
+    # baseline-subtracted; baseline-only under --intersect-sbom): one merged CSV
+    # with a Notes column + one CycloneDX
     # SBOM. The merged CSV supersedes the per-ecosystem <eco>-deps.csv the
     # generators wrote flat, so drop those (validation runs on the merged CSV).
     for eco in _ALL_ECOSYSTEMS:
