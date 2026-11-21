@@ -353,7 +353,13 @@ RUN apt-get update && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 {% endif %}
 
-{% if device == "cuda" and variant != "enterprise" %}{# The enterprise base ships no distro FFmpeg stack to purge. #}
+{% if device in ("cuda", "cpu") and variant != "enterprise" %}{# The enterprise base ships no distro FFmpeg stack to purge. #}
+{% if device == "cpu" %}
+# CPU applies the same purge as CUDA to vllm/vllm-openai-cpu (Ubuntu 22.04),
+# which ships the same distro ffmpeg + libx264/libx265 stack. Without NVDEC
+# there is no hardware path to replace the software H.264/H.265 decoders, so
+# video input on the CPU image is limited to what the in-tree ffmpeg decodes.
+{% endif %}
 # The upstream vllm/vllm-openai base image ships a GPL/GPL-3.0 ffmpeg built
 # against libx264/libx265/libmp3lame. Purge ONLY the explicitly-named ffmpeg +
 # codec packages and replace them with the LGPL-only in-tree ffmpeg built in
@@ -377,32 +383,20 @@ RUN apt-get update && \
 # librist uses, are named because nothing else links them.
 #
 # apt-get purge does remove each installed package that depends on a purged
-# one. In the current base, those are the seven packages in `dependents`. A
+# one. In the current base, those are the {{ "six" if device == "cpu" else "seven" }} packages in `dependents`. A
 # simulated purge runs first, and the build fails unless it removes every
 # matched package and nothing outside the match and `dependents`. A new
 # dependent in a later base then stops the build instead of leaving the image
 # unnoticed.
-RUN set -eux; \
-    purge=$(dpkg-query -W -f='${Package}\n' 2>/dev/null \
-        | grep -E '^(ffmpeg|libav[a-z]|libsw[a-z]|libpostproc|libx264|libx265|libmp3lame|libaom|libdav1d|libvpx|libtheora|libvorbis|libopus|libsoxr|libcaca|libcdio|libzvbi|libgme|libvidstab|libdc1394|libraw1394|libiec61883|libtwolame|libshine|libsrt[0-9]|libudfread|libsvtav1|libbs2b|librubberband|libchromaprint|libcodec2|libgsm|libass[0-9]|libbluray|libxvidcore|libflite|librist[0-9]|libmbedcrypto|libmbedtls|libmbedx509|libcjson)' \
-        || true); \
-    dependents="libjack-jackd2-0 libopenmpt0t64 libpocketsphinx3 libpulse0 libsdl2-2.0-0 libsndfile1 libsphinxbase3t64"; \
-    if [ -n "$purge" ]; then \
-        removed=$(apt-get -s purge $purge | awk '/^(Remv|Purg) /{sub(/:.*/, "", $2); print $2}'); \
-        [ -n "$removed" ] || { echo "ERROR: a simulated purge of the matched packages removes nothing" >&2; exit 1; }; \
-        kept=$(printf '%s\n' $purge | grep -vxF "$removed" || true); \
-        extra=$(printf '%s\n' $removed | grep -vxF "$(printf '%s\n' $purge $dependents)" || true); \
-        [ -z "$kept$extra" ] || { echo "ERROR: the purge would keep: ${kept:-none}; and also remove: ${extra:-none}" >&2; exit 1; }; \
-        DEBIAN_FRONTEND=noninteractive apt-get purge -y $purge; \
-    fi; \
-    rm -rf /var/lib/apt/lists/*
+{% set codec_purge_dependents = "libopenmpt0 libpocketsphinx3 libpulse0 libsdl2-2.0-0 libsndfile1 libsphinxbase3" if device == "cpu" else "libjack-jackd2-0 libopenmpt0t64 libpocketsphinx3 libpulse0 libsdl2-2.0-0 libsndfile1 libsphinxbase3t64" -%}
+{% include "templates/codec_apt_purge.Dockerfile" %}
 
 # Regression guard for the codec purge above: torch.inductor/Triton JIT shell
 # out to a host C/C++ compiler at runtime, so a missing toolchain only surfaces
 # on the first compile in production. Reproduce that compile path at build time
 # (CPU-only) so a missing compiler aborts the build instead of shipping.
 RUN --mount=type=bind,source=./container/deps/vllm/validate_torch_compile_smoke.py,target=/tmp/validate_torch_compile_smoke.py,readonly \
-    python3 /tmp/validate_torch_compile_smoke.py
+    {{ 'TORCH_COMPILE_SMOKE_TOOLS="gcc g++ make" ' if device == "cpu" else "" }}python3 /tmp/validate_torch_compile_smoke.py
 {% endif %}
 
 # Copy the LGPL ffmpeg from wheel_builder: versioned shared libs (libav*.so*,
@@ -564,7 +558,7 @@ RUN --mount=type=bind,source=./container/deps/requirements.vllm.txt,target=/tmp/
 # tool scripts referencing files not present in Dynamo's build context.
 RUN rm -rf /workspace/vllm
 
-{% if device == "cuda" %}
+{% if device in ("cuda", "cpu") %}
 # Transitional: this exists only until no upstream brings these in.
 # The permanent statement of what may ship is
 # tests/dependencies/test_no_software_video_codecs.py -- when this purge
@@ -576,13 +570,13 @@ RUN rm -rf /workspace/vllm
 # vLLM component keeps OpenCV for mistral_common's cv2.resize: when no other cv2
 # remains (a base may ship a codec-free one in a venv ahead of system Python), it
 # is rebuilt at the removed version with video backends disabled.
-# (PyNvVideoCodec is KEPT for NVDEC hardware decode -- see the note below.) The in-tree
+# {% if device == "cuda" %}(PyNvVideoCodec is KEPT for NVDEC hardware decode -- see the note below.) {% endif %}The in-tree
 # LGPL ffmpeg + imageio-ffmpeg installed above are intentionally KEPT for the
 # omni video-encode path, which uses the royalty-free VP9 (libvpx_vp9) encoder —
 # no H.264 is built. Direct rm makes the removal robust regardless of how the
 # base image's pip is configured; the guards fail the build if any of them survive.
 RUN set -eux; \
-    SYS_PYTHON=/usr/bin/python3; \
+    SYS_PYTHON={{ "/opt/venv/bin/python" if device == "cpu" else "/usr/bin/python3" }}; \
     OPENCV_VERSION="$("${SYS_PYTHON}" -m pip show opencv-python-headless 2>/dev/null | awk '/^Version:/{print $2}')"; \
     if [ -z "${OPENCV_VERSION}" ]; then \
         OPENCV_VERSION="$("${SYS_PYTHON}" -m pip show opencv-python 2>/dev/null | awk '/^Version:/{print $2}')"; \
@@ -611,7 +605,9 @@ RUN set -eux; \
     python3 -c "import cv2; cv2.resize"; \
     python3 -c "import os, sys; libs=[os.path.join(p, n) for p in sys.path if p and os.path.isdir(p) for n in os.listdir(p) if n.startswith('opencv_python') and n.endswith('.libs')]; sys.exit('ERROR: cv2 ships vendored libraries: ' + ', '.join(libs) if libs else 0)"; \
     python3 -c "import cv2,re,sys; enabled=[name for name,value in re.findall(r'^\s*(FFMPEG|GSTREAMER):\s*(\S+)', cv2.getBuildInformation(), re.M|re.I) if value.upper()=='YES']; sys.exit('ERROR: cv2 was built with video backends: '+', '.join(enabled) if enabled else 0)"
+{% endif %}
 
+{% if device == "cuda" %}
 # PyNvVideoCodec is KEPT (removed from the purge above) but REPLACED with 2.2.4 by
 # the removal and requirements install above: the base image's 2.0.4 bundles a
 # full FFmpeg 8.1.1 (incl. libavcodec) that the codec gate rejects, while 2.2.4

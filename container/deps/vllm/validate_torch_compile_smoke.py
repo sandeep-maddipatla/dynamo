@@ -18,13 +18,19 @@ raise rather than silently fall back to eager.
 
 from __future__ import annotations
 
+import os
 import shutil
 import sys
 
 import torch
 import torch._dynamo as dynamo
 
-REQUIRED_TOOLS = ("cc", "gcc", "g++", "make")
+# Overridable for a base that never shipped one of these: vllm/vllm-openai-cpu
+# installs gcc-15 through alternatives for gcc/g++ only, with no `cc`, and its
+# inductor CPU backend compiles with g++. The compile check below still runs.
+REQUIRED_TOOLS = tuple(
+    os.environ.get("TORCH_COMPILE_SMOKE_TOOLS", "cc gcc g++ make").split()
+)
 
 
 def _check_tools() -> None:
